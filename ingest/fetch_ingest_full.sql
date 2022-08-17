@@ -34,7 +34,7 @@ WITH deletes AS (
   DELETE
   FROM tempfetchdata
   WHERE datetime <= (
-    SELECT max(range_end)
+    SELECT COALESCE(max(range_end), '1970-01-01'::timestamp)
     FROM timescaledb_information.chunks
     WHERE hypertable_name IN ('rollups', 'measurements')
     AND is_compressed
@@ -499,7 +499,7 @@ FROM inserts;
 -- FROM updates;
 
 
-RAISE NOTICE 'total-measurements: %, deleted-timescaledb: %, deleted-future-measurements: %, deleteted-past-measurements: %, from: %, to: %, inserted-from: %, inserted-to: %, updated-nodes: %, inserted-measurements: %, inserted-measurands: %, inserted-nodes: %, rejected-nodes: %, rejected-systems: %, rejected-sensors: %, process-time-ms: %'
+RAISE NOTICE 'total-measurements: %, deleted-timescaledb: %, deleted-future-measurements: %, deleted-past-measurements: %, from: %, to: %, inserted-from: %, inserted-to: %, updated-nodes: %, inserted-measurements: %, inserted-measurands: %, inserted-nodes: %, rejected-nodes: %, rejected-systems: %, rejected-sensors: %, process-time-ms: %'
       , __total_measurements
       , __deleted_timescaledb
       , __deleted_future_measurements
