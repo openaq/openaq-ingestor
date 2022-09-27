@@ -17,6 +17,15 @@ CREATE TEMP TABLE IF NOT EXISTS tempfetchdata (
     sensors_id int
 );
 
-CREATE TEMP TABLE ingestfiles(
+CREATE TEMP TABLE IF NOT EXISTS ingestfiles(
     key text
+);
+
+-- This table will hold measurements that have
+-- actually been inserted into the measurements table
+-- this is to deal with the overlap that we see in the
+-- incoming files
+CREATE TEMP TABLE IF NOT EXISTS temp_inserted_measurements (
+  sensors_id int,
+  datetime timestamptz
 );

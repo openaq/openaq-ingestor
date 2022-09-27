@@ -19,6 +19,7 @@ __inserted_end_datetime timestamptz;
 __deleted_timescaledb int;
 __deleted_future_measurements int;
 __deleted_past_measurements int;
+__exported_days int;
 BEGIN
 
 SELECT now() INTO __process_start;
@@ -29,6 +30,8 @@ SELECT now() INTO __process_start;
 
 -- Note: I am including this because it already existed
 -- I am not sure why its here
+-- update: it is likely here because we cannot insert data into
+-- compressed partitions
 
 WITH deletes AS (
   DELETE
@@ -54,13 +57,15 @@ FROM deletes;
 
 -- this seems questionable, I dont want to pass data to this
 -- process only to have some of it filtered out because its too old
-WITH deletes AS (
-  DELETE
-  FROM tempfetchdata
-  WHERE datetime < (SELECT max(datetime) - '2 days'::interval from tempfetchdata)
-  RETURNING 1)
-SELECT COUNT(1) INTO __deleted_past_measurements
-FROM deletes;
+-- Commenting this out because it will prevent us from submitting patch
+-- data that spans more than two days.
+-- WITH deletes AS (
+--   DELETE
+--   FROM tempfetchdata
+--   WHERE datetime < (SELECT max(datetime) - '2 days'::interval from tempfetchdata)
+--   RETURNING 1)
+-- SELECT COUNT(1) INTO __deleted_past_measurements
+-- FROM deletes;
 
 ----------------------------------
 
@@ -169,12 +174,13 @@ SELECT * FROM (SELECT
     ismobile,
     null::int as sensor_nodes_id,
     null::int as sensor_systems_id,
+    null::boolean as added,
     st_centroid(st_collect(geom)) as geom,
     array_agg(tfsid) as tfsids
 FROM tempfetchdata_sensors
 WHERE geom IS NOT NULL
 GROUP BY
-    1,2,3,4,5,6,7,8,st_snaptogrid(geom, .0001)
+    1,2,3,4,5,6,7,8,9,st_snaptogrid(geom, .0001)
 ) AS wgeom
 UNION ALL
 SELECT * FROM
@@ -187,6 +193,7 @@ SELECT * FROM
     ismobile,
     null::int as sensor_nodes_id,
     null::int as sensor_systems_id,
+    null::boolean as added,
     null::geometry as geom,
     array_agg(tfsid) as tfsids
 FROM tempfetchdata_sensors
@@ -194,7 +201,7 @@ WHERE geom IS NULL
 AND site_name is not null
 and source_name is not null
 GROUP BY
-    1,2,3,4,5,6,7,8,9
+    1,2,3,4,5,6,7,8,9,10
 ) as nogeom
 ;
 
@@ -206,6 +213,7 @@ GROUP BY
 
 UPDATE tempfetchdata_nodes t
 SET sensor_nodes_id = sn.sensor_nodes_id
+, added = FALSE
 FROM sensor_nodes sn
 WHERE t.geom IS NOT NULL
 AND st_dwithin(sn.geom, t.geom, .0001)
@@ -213,6 +221,7 @@ AND origin='OPENAQ';
 
 UPDATE tempfetchdata_nodes t
 SET sensor_nodes_id = sn.sensor_nodes_id
+, added = FALSE
 FROM sensor_nodes sn
 WHERE t.sensor_nodes_id is null
 AND t.site_name is not null
@@ -234,7 +243,8 @@ UPDATE sensor_nodes s SET
     country = COALESCE(t.country, s.country),
     ismobile = COALESCE(t.ismobile, s.ismobile),
     metadata = COALESCE(s.metadata, '{}'::jsonb) || t.metadata,
-    geom = COALESCE(t.geom, s.geom)
+    geom = COALESCE(t.geom, s.geom),
+    modified_on = now()
 FROM tempfetchdata_nodes t
 WHERE t.sensor_nodes_id = s.sensor_nodes_id AND
 (
@@ -276,7 +286,8 @@ INSERT INTO sensor_nodes (
     source_name,
     city,
     country,
-    ismobile
+    ismobile,
+    origin
 )
 SELECT
     site_name,
@@ -285,13 +296,15 @@ SELECT
     source_name,
     city,
     country,
-    ismobile
+    ismobile,
+    'OPENAQ'
 FROM tempfetchdata_nodes t
 WHERE t.sensor_nodes_id is NULL
 RETURNING *
 ), inserted AS (
 UPDATE tempfetchdata_nodes tf SET
  sensor_nodes_id = sn.sensor_nodes_id
+ , added = TRUE
 FROM sn
 WHERE tf.sensor_nodes_id is null
 and row(tf.site_name, tf.geom, tf.source_name) is not distinct from row(sn.site_name, sn.geom, sn.source_name)
@@ -304,8 +317,8 @@ FROM sn;
 -------------
 
 UPDATE tempfetchdata_nodes t
-SET sensor_systems_id = ss.sensor_systems_id FROM
-sensor_systems ss
+SET sensor_systems_id = ss.sensor_systems_id
+FROM sensor_systems ss
 WHERE t.sensor_nodes_id = ss.sensor_nodes_id;
 
 -- Add any rows that did not get an id
@@ -389,7 +402,8 @@ SELECT
     sensor_systems_id,
     measurands_id,
     jsonb_merge_agg(sensor_metadata) as metadata,
-    array_merge_agg(tfdids) as tfdids
+    array_merge_agg(tfdids) as tfdids,
+    null::boolean as added
 FROM tempfetchdata_sensors
 GROUP BY 1,2,3,4;
 
@@ -397,6 +411,7 @@ GROUP BY 1,2,3,4;
 -- get sensor id
 UPDATE tempfetchdata_sensors_clean t
 SET sensors_id = s.sensors_id
+, added = FALSE
 FROM sensors s
 WHERE t.sensor_systems_id = s.sensor_systems_id
 AND t.measurands_id = s.measurands_id
@@ -437,18 +452,20 @@ WITH s AS (
     WHERE
         tf.sensors_id IS NULL
     RETURNING *
-), u AS (UPDATE tempfetchdata_sensors_clean tfc
+), u AS (
+    UPDATE tempfetchdata_sensors_clean tfc
     SET
-        sensors_id = s.sensors_id
+        sensors_id = s.sensors_id,
+        added = TRUE
     FROM s
     WHERE
         tfc.sensors_id IS NULL
         AND
         s.sensor_systems_id = tfc.sensor_systems_id
         AND
-        s.measurands_id = tfc.measurands_id
-) SELECT COUNT(1) INTO __inserted_sensors
-FROM s;
+        s.measurands_id = tfc.measurands_id)
+ SELECT COUNT(1) INTO __inserted_sensors
+ FROM s;
 
 UPDATE tempfetchdata t
 SET sensors_id = ts.sensors_id
@@ -479,7 +496,13 @@ WITH inserts AS (
   , value
   FROM tempfetchdata
   ON CONFLICT DO NOTHING
-  RETURNING datetime)
+  RETURNING sensors_id, datetime
+), inserted as (
+   INSERT INTO temp_inserted_measurements (sensors_id, datetime)
+   SELECT sensors_id
+   , datetime
+   FROM inserts
+)
 SELECT MIN(datetime)
 , MAX(datetime)
 , COUNT(1)
@@ -487,6 +510,31 @@ INTO __inserted_start_datetime
 , __inserted_end_datetime
 , __inserted_measurements
 FROM inserts;
+
+
+WITH inserts AS (
+  INSERT INTO measurements (sensors_id, datetime, value)
+  SELECT sensors_id
+  , datetime
+  , value
+  FROM tempfetchdata
+  ON CONFLICT DO NOTHING
+  RETURNING sensors_id, datetime
+), inserted as (
+   INSERT INTO temp_inserted_measurements (sensors_id, datetime)
+   SELECT sensors_id
+   , datetime
+   FROM inserts
+   RETURNING sensors_id, datetime
+)
+SELECT MIN(datetime)
+, MAX(datetime)
+, COUNT(1)
+INTO __inserted_start_datetime
+, __inserted_end_datetime
+, __inserted_measurements
+FROM inserted;
+
 
 -- No longer going to manage the fetch log in this way
 -- WITH updates AS (
@@ -499,7 +547,30 @@ FROM inserts;
 -- FROM updates;
 
 
-RAISE NOTICE 'total-measurements: %, deleted-timescaledb: %, deleted-future-measurements: %, deleted-past-measurements: %, from: %, to: %, inserted-from: %, inserted-to: %, updated-nodes: %, inserted-measurements: %, inserted-measurands: %, inserted-nodes: %, rejected-nodes: %, rejected-systems: %, rejected-sensors: %, process-time-ms: %'
+WITH e AS (
+INSERT INTO open_data_export_logs (sensor_nodes_id, day, records, measurands, modified_on)
+SELECT sn.sensor_nodes_id
+, ((m.datetime - '1sec'::interval) AT TIME ZONE (COALESCE(sn.metadata->>'timezone', 'UTC'))::text)::date as day
+, COUNT(1)
+, COUNT(DISTINCT p.measurands_id)
+, MAX(now())
+FROM temp_inserted_measurements m --tempfetchdata m
+JOIN sensors s ON (m.sensors_id = s.sensors_id)
+JOIN measurands p ON (s.measurands_id = p.measurands_id)
+JOIN sensor_systems ss ON (s.sensor_systems_id = ss.sensor_systems_id)
+JOIN sensor_nodes sn ON (ss.sensor_nodes_id = sn.sensor_nodes_id)
+GROUP BY sn.sensor_nodes_id
+, ((m.datetime - '1sec'::interval) AT TIME ZONE (COALESCE(sn.metadata->>'timezone', 'UTC'))::text)::date
+ON CONFLICT (sensor_nodes_id, day) DO UPDATE
+SET records = EXCLUDED.records
+, measurands = EXCLUDED.measurands
+, modified_on = EXCLUDED.modified_on
+RETURNING 1)
+SELECT COUNT(1) INTO __exported_days
+FROM e;
+
+
+RAISE NOTICE 'total-measurements: %, deleted-timescaledb: %, deleted-future-measurements: %, deleted-past-measurements: %, from: %, to: %, inserted-from: %, inserted-to: %, updated-nodes: %, inserted-measurements: %, inserted-measurands: %, inserted-nodes: %, rejected-nodes: %, rejected-systems: %, rejected-sensors: %, exported-sensor-days: %, process-time-ms: %, source: fetch'
       , __total_measurements
       , __deleted_timescaledb
       , __deleted_future_measurements
@@ -515,6 +586,7 @@ RAISE NOTICE 'total-measurements: %, deleted-timescaledb: %, deleted-future-meas
       , __rejected_nodes
       , __rejected_systems
       , __rejected_sensors
+      , __exported_days
       , 1000 * (extract(epoch FROM clock_timestamp() - __process_start));
 
 END $$;
