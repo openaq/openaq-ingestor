@@ -243,8 +243,8 @@ UPDATE sensor_nodes s SET
     country = COALESCE(t.country, s.country),
     ismobile = COALESCE(t.ismobile, s.ismobile),
     metadata = COALESCE(s.metadata, '{}'::jsonb) || t.metadata,
-    geom = COALESCE(t.geom, s.geom),
-    modified_on = now()
+    geom = COALESCE(t.geom, s.geom)
+    --, modified_on = now()
 FROM tempfetchdata_nodes t
 WHERE t.sensor_nodes_id = s.sensor_nodes_id AND
 (
