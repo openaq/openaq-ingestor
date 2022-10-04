@@ -489,28 +489,6 @@ DELETE
 FROM tempfetchdata
 WHERE sensors_id IS NULL;
 
-WITH inserts AS (
-  INSERT INTO measurements (sensors_id, datetime, value)
-  SELECT sensors_id
-  , datetime
-  , value
-  FROM tempfetchdata
-  ON CONFLICT DO NOTHING
-  RETURNING sensors_id, datetime
-), inserted as (
-   INSERT INTO temp_inserted_measurements (sensors_id, datetime)
-   SELECT sensors_id
-   , datetime
-   FROM inserts
-)
-SELECT MIN(datetime)
-, MAX(datetime)
-, COUNT(1)
-INTO __inserted_start_datetime
-, __inserted_end_datetime
-, __inserted_measurements
-FROM inserts;
-
 
 WITH inserts AS (
   INSERT INTO measurements (sensors_id, datetime, value)

@@ -24,6 +24,12 @@ parser.add_argument('--n', type=int, required=False, default=30,
                     help="""Either the number of entries to list
                     (sorted by date) or the number of days to go
                     back if using the summary or rejects arguments""")
+parser.add_argument('--pipeline', type=int, required=False, default=1,
+                    help="""The number of pipeline files to load at a time""")
+parser.add_argument('--metadata', type=int, required=False, default=1,
+                    help="""The number of metadata files to load at a time""")
+parser.add_argument('--realtime', type=int, required=False, default=1,
+                    help="""The number of realtime files to load at a time""")
 parser.add_argument('--fix', action="store_true",
                     help='Automatically attempt to fix the problem')
 parser.add_argument('--load', action="store_true",
@@ -38,6 +44,8 @@ parser.add_argument('--summary', action="store_true",
                     help='Summarize the fetchlog errors by type')
 parser.add_argument('--rejects', action="store_true",
                     help='Show summary of the rejects errors')
+parser.add_argument('--errors', action="store_true",
+                    help='Show list of errors')
 parser.add_argument('--resubmit', action="store_true",
                     help='Mark the fetchlogs file for resubmittal')
 args = parser.parse_args()
@@ -174,9 +182,16 @@ elif args.rejects:
             for station in station_keys:
                 print(f"station key: {station[1]}; log: {station[0]}")
 # otherwise fetch a list of errors
-else:
+elif args.errors:
     errors = load_errors_list(args.n)
     for error in errors:
         print(f"------------------\nDATE: {error[2]}\nKEY: {error[1]}\nID:{error[0]}\nERROR:{error[5]}")
         if 'realtime' in error[1]:
             check_realtime_key(error[1], args.fix)
+else:
+    cronhandler({
+        "source": "check",
+        "pipeline_limit": args.pipeline,
+        "metadata_limit": args.metadata,
+        "realtime_limit": args.realtime,
+    }, {})
