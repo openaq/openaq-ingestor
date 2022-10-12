@@ -154,7 +154,7 @@ if args.id is not None:
             else:
                 check_realtime_key(key, args.fix)
         else:
-            print(key)
+            load_measurements([(args.id, key, None)])
 
         if args.download:
             print(f'downloading: {key}')

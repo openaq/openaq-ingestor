@@ -31,4 +31,27 @@ CREATE TEMP TABLE IF NOT EXISTS ms_sensors (
     fetchlogs_id int
 );
 
-CREATE TEMP TABLE keys (fetchlogs_id int, key text, last_modified timestamptz);
+CREATE TEMP TABLE IF NOT EXISTS meas (
+    ingest_id text,
+    sensors_id int,
+    value float,
+    datetime timestamptz,
+    lon float,
+    lat float,
+    fetchlogs_id int
+);
+
+CREATE TEMP TABLE IF NOT EXISTS keys (
+    fetchlogs_id int
+    , key text
+    , last_modified timestamptz
+    );
+
+-- This table will hold measurements that have
+-- actually been inserted into the measurements table
+-- this is to deal with the overlap that we see in the
+-- incoming files
+CREATE TEMP TABLE IF NOT EXISTS temp_inserted_measurements (
+  sensors_id int,
+  datetime timestamptz
+);

@@ -532,7 +532,7 @@ def load_measurements(rows):
             connection.set_session(autocommit=True)
             with connection.cursor() as cursor:
 
-                cursor.execute(get_query("lcs_meas_staging.sql"))
+                cursor.execute(get_query("lcs_staging.sql"))
                 start = time()
                 write_csv(
                     cursor, new, "keys", ["key",],
