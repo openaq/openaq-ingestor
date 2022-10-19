@@ -230,6 +230,13 @@ elif args.pattern is not None:
 					(id, key, last)
 				])
 
+        if args.download:
+            print(f'downloading: {key}')
+            txt = get_object(key)
+            fpath = os.path.expanduser(f'~/Downloads/{key}')
+            os.makedirs(os.path.dirname(fpath), exist_ok=True)
+            with open(fpath.replace('.gz',''), 'w') as f:
+                f.write(txt)
 
 
 # Otherwise if we set the summary flag return a daily summary of errors
