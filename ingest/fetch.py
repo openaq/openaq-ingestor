@@ -1,10 +1,10 @@
 import gzip
 import io
-import json
 import os
 import logging
 import time
 from datetime import datetime, timedelta
+import orjson
 
 import boto3
 import psycopg2
@@ -64,7 +64,7 @@ def parse_json(j, key: str = None):
     else:
         coords = None
 
-    data = json.dumps(j)
+    data = orjson.dumps(j).decode()
 
     row = [
         location,
@@ -105,7 +105,7 @@ def copy_data(cursor, key):
     with gzip.GzipFile(fileobj=obj.get()["Body"]) as gz:
         f = io.BufferedReader(gz)
         iterator = StringIteratorIO(
-            (parse_json(json.loads(line)) for line in f)
+            (parse_json(orjson.loads(line)) for line in f)
         )
         query = """
         COPY tempfetchdata (
@@ -132,7 +132,7 @@ def copy_file(cursor, file):
     with gzip.GzipFile(file) as gz:
         f = io.BufferedReader(gz)
         iterator = StringIteratorIO(
-            (parse_json(json.loads(line)) for line in f)
+            (parse_json(orjson.loads(line)) for line in f)
         )
         try:
             query = get_query("fetch_copy.sql")
