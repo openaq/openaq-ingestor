@@ -1,7 +1,7 @@
 import argparse
 import logging
 import os
-import json
+import orjson
 
 logger = logging.getLogger(__name__)
 
@@ -107,18 +107,19 @@ def check_realtime_key(key: str, fix: bool = False):
     n = len(lines)
     errors = []
     for jdx, line in enumerate(lines):
-        try:
-            # first just try and load it
-            obj = json.loads(line)
-        except Exception as e:
-            errors.append(jdx)
-            print(f"*** Loading error on line #{jdx} (of {n}): {e}\n{line}")
-        try:
-            # then we can try to parse it
-            parse_json(obj)
-        except Exception as e:
-            errors.append(jdx)
-            print(f"*** Parsing error on line #{jdx} (of {n}): {e}\n{line}")
+        if len(line) > 0:
+            try:
+                # first just try and load it
+                obj = orjson.loads(line)
+            except Exception as e:
+                errors.append(jdx)
+                print(f"*** Loading error on line #{jdx} (of {n}): {e}\n{line}")
+            try:
+                # then we can try to parse it
+                parse_json(obj)
+            except Exception as e:
+                errors.append(jdx)
+                print(f"*** Parsing error on line #{jdx} (of {n}): {e}\n{line}")
 
     if len(errors) > 0 and fix:
         # remove the bad rows and then replace the file
@@ -143,6 +144,7 @@ if args.id is not None:
     keys = [log[1] for log in logs]
     # loop through and check each
     for idx, key in enumerate(keys):
+        print(key)
         # if we are resubmiting we dont care
         # what type of file it is
         if args.resubmit:
@@ -159,7 +161,7 @@ if args.id is not None:
         if args.download:
             print(f'downloading: {key}')
             txt = get_object(key)
-            fpath = os.path.expanduser(f'~/{key}')
+            fpath = os.path.expanduser(f'~/Downloads/{key}')
             os.makedirs(os.path.dirname(fpath), exist_ok=True)
             with open(fpath.replace('.gz',''), 'w') as f:
                 f.write(txt)
