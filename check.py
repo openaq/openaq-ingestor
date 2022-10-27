@@ -1,93 +1,117 @@
 import argparse
+import json
 import logging
 import os
-import json
 
 logger = logging.getLogger(__name__)
 
-#os.chdir('/home/christian/git/caparker/openaq-ingestor/ingest')
-#print(os.getcwd())
+# os.chdir('/home/christian/git/caparker/openaq-ingestor/ingest')
+# print(os.getcwd())
 
 parser = argparse.ArgumentParser(
     description="""
     Do some basic checking against the database.
     Requires an env file with the basic database variables,
     the same that you would need to deploy.
-    """)
-parser.add_argument('--id', type=int, required=False,
-                    help='The fetchlogs_id value')
-parser.add_argument('--env', type=str, required=False,
-                    help='The dot env file to use')
-parser.add_argument('--profile', type=str, required=False,
-                    help='The AWS profile to use')
-parser.add_argument('--n', type=int, required=False, default=30,
-                    help="""Either the number of entries to list
+    """
+)
+parser.add_argument("--id", type=int, required=False, help="The fetchlogs_id value")
+parser.add_argument("--env", type=str, required=False, help="The dot env file to use")
+parser.add_argument(
+    "--profile", type=str, required=False, help="The AWS profile to use"
+)
+parser.add_argument(
+    "--n",
+    type=int,
+    required=False,
+    default=30,
+    help="""Either the number of entries to list
                     (sorted by date) or the number of days to go
-                    back if using the summary or rejects arguments""")
-parser.add_argument('--pipeline', type=int, required=False, default=1,
-                    help="""The number of pipeline files to load at a time""")
-parser.add_argument('--metadata', type=int, required=False, default=1,
-                    help="""The number of metadata files to load at a time""")
-parser.add_argument('--realtime', type=int, required=False, default=1,
-                    help="""The number of realtime files to load at a time""")
-parser.add_argument('--fix', action="store_true",
-                    help='Automatically attempt to fix the problem')
-parser.add_argument('--load', action="store_true",
-                    help='Attempt to load the file manually, outside the queue')
-parser.add_argument('--download', action="store_true",
-                    help='Attempt to download the file')
-parser.add_argument('--dryrun', action="store_true",
-                    help='Check to see if its fixable but dont actually save it')
-parser.add_argument('--debug', action="store_true",
-                    help='Output at DEBUG level')
-parser.add_argument('--summary', action="store_true",
-                    help='Summarize the fetchlog errors by type')
-parser.add_argument('--rejects', action="store_true",
-                    help='Show summary of the rejects errors')
-parser.add_argument('--errors', action="store_true",
-                    help='Show list of errors')
-parser.add_argument('--resubmit', action="store_true",
-                    help='Mark the fetchlogs file for resubmittal')
+                    back if using the summary or rejects arguments""",
+)
+parser.add_argument(
+    "--pipeline",
+    type=int,
+    required=False,
+    default=1,
+    help="""The number of pipeline files to load at a time""",
+)
+parser.add_argument(
+    "--metadata",
+    type=int,
+    required=False,
+    default=1,
+    help="""The number of metadata files to load at a time""",
+)
+parser.add_argument(
+    "--realtime",
+    type=int,
+    required=False,
+    default=1,
+    help="""The number of realtime files to load at a time""",
+)
+parser.add_argument(
+    "--fix", action="store_true", help="Automatically attempt to fix the problem"
+)
+parser.add_argument(
+    "--load",
+    action="store_true",
+    help="Attempt to load the file manually, outside the queue",
+)
+parser.add_argument(
+    "--download", action="store_true", help="Attempt to download the file"
+)
+parser.add_argument(
+    "--dryrun",
+    action="store_true",
+    help="Check to see if its fixable but dont actually save it",
+)
+parser.add_argument("--debug", action="store_true", help="Output at DEBUG level")
+parser.add_argument(
+    "--summary", action="store_true", help="Summarize the fetchlog errors by type"
+)
+parser.add_argument(
+    "--rejects", action="store_true", help="Show summary of the rejects errors"
+)
+parser.add_argument("--errors", action="store_true", help="Show list of errors")
+parser.add_argument(
+    "--resubmit", action="store_true", help="Mark the fetchlogs file for resubmittal"
+)
 args = parser.parse_args()
 
-if 'DOTENV' not in os.environ.keys() and args.env is not None:
-    os.environ['DOTENV'] = args.env
+if "DOTENV" not in os.environ.keys() and args.env is not None:
+    os.environ["DOTENV"] = args.env
 
-if 'AWS_PROFILE' not in os.environ.keys() and args.profile is not None:
-    os.environ['AWS_PROFILE'] = args.profile
+if "AWS_PROFILE" not in os.environ.keys() and args.profile is not None:
+    os.environ["AWS_PROFILE"] = args.profile
 
 if args.dryrun:
-    os.environ['DRYRUN'] = 'True'
+    os.environ["DRYRUN"] = "True"
 
 if args.debug:
-    os.environ['LOG_LEVEL'] = 'DEBUG'
+    os.environ["LOG_LEVEL"] = "DEBUG"
 
 from botocore.exceptions import ClientError
-from ingest.handler import cronhandler, logger
-from ingest.settings import settings
 
+from ingest.fetch import load_realtime, parse_json
+from ingest.handler import cronhandler, logger
 from ingest.lcs import (
-    load_metadata_db,
+    get_measurements,
+    load_measurements,
     load_measurements_db,
     load_measurements_file,
-    load_measurements,
-    get_measurements,
+    load_metadata_db,
 )
-
-from ingest.fetch import (
-    load_realtime,
-    parse_json,
-)
-
+from ingest.settings import settings
 from ingest.utils import (
+    get_logs_from_ids,
+    get_logs_from_pattern,
+    get_object,
     load_errors_list,
     load_errors_summary,
     load_rejects_summary,
-    get_object,
-    put_object,
-    get_logs_from_ids,
-    get_logs_from_pattern,
     mark_success,
+    put_object,
 )
 
 
@@ -100,7 +124,7 @@ def check_realtime_key(key: str, fix: bool = False):
     except Exception as e:
         # these errors are not fixable so return
         logger.error(f"\t*** Error getting file: {e}")
-        return;
+        return
     # break into lines
     lines = txt.split("\n")
     # check parse for each line
@@ -126,10 +150,7 @@ def check_realtime_key(key: str, fix: bool = False):
         message = f"Fixed: removed {len(errors)} and now have {len(nlines)} lines"
         print(message)
         ntext = "\n".join(nlines)
-        put_object(
-            data=ntext,
-            key=key
-        )
+        put_object(data=ntext, key=key)
         mark_success(key=key, reset=True, message=message)
     elif len(errors) == 0 and fix:
         mark_success(key=key, reset=True)
@@ -146,9 +167,9 @@ if args.id is not None:
         # if we are resubmiting we dont care
         # what type of file it is
         if args.resubmit:
-            mark_success(key, reset=True, message='resubmitting')
+            mark_success(key, reset=True, message="resubmitting")
         # figure out what type of file it is
-        elif 'realtime' in key:
+        elif "realtime" in key:
             if args.load:
                 load_realtime([key])
             else:
@@ -157,11 +178,11 @@ if args.id is not None:
             print(key)
 
         if args.download:
-            print(f'downloading: {key}')
+            print(f"downloading: {key}")
             txt = get_object(key)
-            fpath = os.path.expanduser(f'~/{key}')
+            fpath = os.path.expanduser(f"~/{key}")
             os.makedirs(os.path.dirname(fpath), exist_ok=True)
-            with open(fpath.replace('.gz',''), 'w') as f:
+            with open(fpath.replace(".gz", ""), "w") as f:
                 f.write(txt)
 
 
@@ -185,13 +206,18 @@ elif args.rejects:
 elif args.errors:
     errors = load_errors_list(args.n)
     for error in errors:
-        print(f"------------------\nDATE: {error[2]}\nKEY: {error[1]}\nID:{error[0]}\nERROR:{error[5]}")
-        if 'realtime' in error[1]:
+        print(
+            f"------------------\nDATE: {error[2]}\nKEY: {error[1]}\nID:{error[0]}\nERROR:{error[5]}"
+        )
+        if "realtime" in error[1]:
             check_realtime_key(error[1], args.fix)
 else:
-    cronhandler({
-        "source": "check",
-        "pipeline_limit": args.pipeline,
-        "metadata_limit": args.metadata,
-        "realtime_limit": args.realtime,
-    }, {})
+    cronhandler(
+        {
+            "source": "check",
+            "pipeline_limit": args.pipeline,
+            "metadata_limit": args.metadata,
+            "realtime_limit": args.realtime,
+        },
+        {},
+    )
