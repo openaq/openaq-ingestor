@@ -3,11 +3,11 @@ import sys
 import os
 import json
 
-if 'DOTENV' not in os.environ.keys():
-    os.environ['DOTENV'] = '.env.testing'
+if "DOTENV" not in os.environ.keys():
+    os.environ["DOTENV"] = ".env.testing"
 
-if 'AWS_PROFILE' not in os.environ.keys():
-    os.environ['AWS_PROFILE'] = 'python-user'
+if "AWS_PROFILE" not in os.environ.keys():
+    os.environ["AWS_PROFILE"] = "python-user"
 
 from pandas import DataFrame
 from botocore.exceptions import ClientError

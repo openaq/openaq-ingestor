@@ -1,8 +1,8 @@
 import gzip
 import io
 import json
-import os
 import logging
+import os
 import time
 from datetime import datetime, timedelta
 
@@ -11,13 +11,7 @@ import psycopg2
 import typer
 
 from .settings import settings
-from .utils import (
-    StringIteratorIO,
-    clean_csv_value,
-    get_query,
-    load_fail,
-    load_success,
-)
+from .utils import StringIteratorIO, clean_csv_value, get_query, load_fail, load_success
 
 app = typer.Typer()
 
@@ -104,9 +98,7 @@ def copy_data(cursor, key):
     logger.debug(f"Copying data for {key}")
     with gzip.GzipFile(fileobj=obj.get()["Body"]) as gz:
         f = io.BufferedReader(gz)
-        iterator = StringIteratorIO(
-            (parse_json(json.loads(line)) for line in f)
-        )
+        iterator = StringIteratorIO((parse_json(json.loads(line)) for line in f))
         query = """
         COPY tempfetchdata (
         location,
@@ -131,9 +123,7 @@ def copy_data(cursor, key):
 def copy_file(cursor, file):
     with gzip.GzipFile(file) as gz:
         f = io.BufferedReader(gz)
-        iterator = StringIteratorIO(
-            (parse_json(json.loads(line)) for line in f)
-        )
+        iterator = StringIteratorIO((parse_json(json.loads(line)) for line in f))
         try:
             query = get_query("fetch_copy.sql")
             cursor.copy_expert(query, iterator)
@@ -171,8 +161,7 @@ def update_rollups(cursor, mindate, maxdate):
     return None
     if mindate is not None and maxdate is not None:
         print(
-            f"Updating rollups from {mindate.isoformat()}"
-            f" to {maxdate.isoformat()}"
+            f"Updating rollups from {mindate.isoformat()}" f" to {maxdate.isoformat()}"
         )
         cursor.execute(
             get_query(
@@ -206,9 +195,7 @@ def load_fetch_day(day: str):
     prefix = f"realtime-gzipped/{day}"
     keys = []
     try:
-        for f in conn.list_objects(Bucket=FETCH_BUCKET, Prefix=prefix)[
-            "Contents"
-        ]:
+        for f in conn.list_objects(Bucket=FETCH_BUCKET, Prefix=prefix)["Contents"]:
             # print(f['Key'])
             keys.append(f["Key"])
     except Exception as e:
@@ -243,8 +230,7 @@ def load_range(
     end: datetime = typer.Argument(datetime.utcnow().date().isoformat()),
 ):
     print(
-        f"Loading data from {start.date().isoformat()}"
-        f" to {end.date().isoformat()}"
+        f"Loading data from {start.date().isoformat()}" f" to {end.date().isoformat()}"
     )
 
     step = timedelta(days=1)
@@ -266,13 +252,16 @@ def submit_file_error(ids, e):
                 , last_message = %s
                 WHERE fetchlogs_id = ANY(%s)
                 """,
-                (f"ERROR: {e}", ids,),
+                (
+                    f"ERROR: {e}",
+                    ids,
+                ),
             )
 
 
 @app.command()
 def load_db(limit: int = 50, ascending: bool = False):
-    order = 'ASC' if ascending else 'DESC'
+    order = "ASC" if ascending else "DESC"
     with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
         connection.set_session(autocommit=True)
         with connection.cursor() as cursor:
@@ -298,9 +287,11 @@ def load_db(limit: int = 50, ascending: bool = False):
                 except Exception as e:
                     # catch and continue to next page
                     ids = [r[2] for r in rows]
-                    logger.error(f"""
+                    logger.error(
+                        f"""
                     Error processing realtime files: {e}, {ids}
-                    """)
+                    """
+                    )
                     submit_file_error(ids, e)
                 finally:
                     connection.commit()

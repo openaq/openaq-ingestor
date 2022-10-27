@@ -1,0 +1,63 @@
+name: Deploy prod
+
+on: 
+  push:
+    branches:
+      - main
+
+env:
+  ENV: "prod"
+  PROJECT: "openaq"
+  DATABASE_READ_USER: ${{ secrets.DATABASE_READ_USER }}
+  DATABASE_WRITE_USER: ${{ secrets.DATABASE_WRITE_USER }}
+  DATABASE_READ_PASSWORD: ${{ secrets.DATABASE_READ_PASSWORD }}
+  DATABASE_WRITE_PASSWORD: ${{ secrets.DATABASE_WRITE_PASSWORD }}
+  DATABASE_DB: ${{ secrets.DATABASE_DB }}
+  DATABASE_HOST: ${{ secrets.DATABASE_HOST }}
+  DATABASE_PORT: ${{ secrets.DATABASE_PORT }}
+  FASTAPI_URL: ${{ secrets.FASTAPI_URL }}
+  DRYRUN: False
+  FETCH_BUCKET: ${{ secrets.FETCH_BUCKET }}
+  ETL_BUCKET: ${{ secrets.ETL_BUCKET }}
+  FETCH_ASCENDING: False
+  INGEST_TIMEOUT: 10
+  PIPELINE_LIMIT: 10
+  METADATA_LIMIT: 10
+  REALTIME_LIMIT: 10
+  LOG_LEVEL: 'INFO'
+  INGEST_LAMBDA_TIMEOUT: 900
+  INGEST_LAMBDA_MEMORY_SIZE: 1536
+  INGEST_RATE_MINUTES: 15
+  LOG_LEVEL: 'INFO'
+  TOPIC_ARN: ${{ secrets.TOPIC_ARN }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Configure aws credentials
+        uses: aws-actions/configure-aws-credentials@master
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_PROD }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY_PROD }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - uses: actions/setup-node@v2
+        with:
+          node-version: "16"
+
+      - name: Install CDK
+        run: |
+          npm install -g aws-cdk@2.25.0
+      - uses: actions/setup-python@v3
+        with:
+          python-version: '3.9'
+
+      - name: Deploy stack
+        working-directory: ./cdk
+        run: |
+          pip install -r requirements.txt
+          cdk deploy openaq-ingest-prod --require-approval never 
