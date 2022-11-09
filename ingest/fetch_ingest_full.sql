@@ -28,24 +28,6 @@ SELECT now() INTO __process_start;
 -- File fetch_filter.sql --
 ---------------------------
 
--- Note: I am including this because it already existed
--- I am not sure why its here
--- update: it is likely here because we cannot insert data into
--- compressed partitions
-
-WITH deletes AS (
-  DELETE
-  FROM tempfetchdata
-  WHERE datetime <= (
-    SELECT COALESCE(max(range_end), '1970-01-01'::timestamp)
-    FROM timescaledb_information.chunks
-    WHERE hypertable_name IN ('rollups', 'measurements')
-    AND is_compressed
-    )
-  RETURNING 1)
-SELECT COUNT(1) INTO __deleted_timescaledb
-FROM deletes;
-
 -- This makes sense though we should track in case its systemic
 WITH deletes AS (
   DELETE
@@ -204,6 +186,7 @@ GROUP BY
     1,2,3,4,5,6,7,8,9,10
 ) as nogeom
 ;
+
 
 -------------
 -- File #4 --
@@ -489,6 +472,11 @@ DELETE
 FROM tempfetchdata
 WHERE sensors_id IS NULL;
 
+--DELETE
+--FROM measurements m
+--USING tempfetchdata t
+--WHERE m.datetime = t.datetime
+--AND m.sensors_id = t.sensors_id;
 
 WITH inserts AS (
   INSERT INTO measurements (sensors_id, datetime, value)
@@ -497,11 +485,12 @@ WITH inserts AS (
   , value
   FROM tempfetchdata
   ON CONFLICT DO NOTHING
-  RETURNING sensors_id, datetime
+  RETURNING sensors_id, datetime, value
 ), inserted as (
-   INSERT INTO temp_inserted_measurements (sensors_id, datetime)
+   INSERT INTO temp_inserted_measurements (sensors_id, datetime, value)
    SELECT sensors_id
    , datetime
+   , value
    FROM inserts
    RETURNING sensors_id, datetime
 )
@@ -513,6 +502,41 @@ INTO __inserted_start_datetime
 , __inserted_measurements
 FROM inserted;
 
+
+-- Now we can use those temp_inserted_measurements to update the cache tables
+INSERT INTO sensors_latest (
+  sensors_id
+  , datetime
+  , value
+  )
+---- identify the row that has the latest value
+WITH numbered AS (
+  SELECT sensors_id
+   , datetime
+   , value
+   , row_number() OVER (PARTITION BY sensors_id ORDER BY datetime DESC) as rn
+  FROM temp_inserted_measurements
+), latest AS (
+---- only insert those rows
+  SELECT sensors_id
+   , datetime
+   , value
+  FROM numbered
+  WHERE rn = 1
+)
+SELECT l.sensors_id
+, l.datetime
+, l.value
+FROM latest l
+LEFT JOIN sensors_latest sl ON (l.sensors_id = sl.sensors_id)
+WHERE sl.sensors_id IS NULL
+OR l.datetime > sl.datetime
+ON CONFLICT (sensors_id) DO UPDATE
+SET datetime = EXCLUDED.datetime
+, value = EXCLUDED.value
+, modified_on = now()
+--, fetchlogs_id = EXCLUDED.fetchlogs_id
+;
 
 -- No longer going to manage the fetch log in this way
 -- WITH updates AS (

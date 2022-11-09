@@ -52,6 +52,10 @@ CREATE TEMP TABLE IF NOT EXISTS keys (
 -- this is to deal with the overlap that we see in the
 -- incoming files
 CREATE TEMP TABLE IF NOT EXISTS temp_inserted_measurements (
-  sensors_id int,
-  datetime timestamptz
+  sensors_id int
+  , datetime timestamptz
+  , value double precision
+  , lat double precision
+  , lon double precision
+  , fetchlogs_id int
 );

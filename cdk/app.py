@@ -19,6 +19,7 @@ from settings import settings as lambda_env
 
 app = aws_cdk.App()
 
+
 ingest = LambdaIngestStack(
     app,
     f"openaq-ingest-{settings.ENV}",

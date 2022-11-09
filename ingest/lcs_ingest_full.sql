@@ -183,27 +183,7 @@ from measurands
 WHERE ms_sensors.measurand=measurands.measurand
 and ms_sensors.units=measurands.units;
 
--- Removed the following because it has the ids hard coded in
--- if we want to continue to filter these out we should do it at the fetcher
--------------------------------------------------------------------------------------------------------------
--- UPDATE ms_sensors                                                                                       --
--- SET measurands_id = 10                                                                                  --
--- WHERE ms_sensors.measurand='ozone'                                                                      --
--- AND ms_sensors.units='ppm';                                                                             --
---                                                                                                         --
--- UPDATE ms_sensors SET measurands_id = 126 WHERE measurands_id is null and ms_sensors.measurand='um010'; --
--- UPDATE ms_sensors SET measurands_id = 130 WHERE measurands_id is null and ms_sensors.measurand='um025'; --
--- UPDATE ms_sensors SET measurands_id = 135 WHERE measurands_id is null and ms_sensors.measurand='um100'; --
--- UPDATE ms_sensors SET measurands_id = 19  WHERE measurands_id is null and ms_sensors.measurand='pm1';   --
--- UPDATE ms_sensors SET measurands_id = 2   WHERE measurands_id is null and ms_sensors.measurand='pm25';  --
--- UPDATE ms_sensors SET measurands_id = 1   WHERE measurands_id is null and ms_sensors.measurand='pm10';  --
---                                                                                                         --
--- DELETE                                                                                                  --
--- FROM ms_sensors                                                                                         --
--- WHERE ingest_id ~* 'purple'                                                                             --
--- AND measurands_id is null                                                                               --
--- AND measurand in ('um003','um050','um005');                                                             --
--------------------------------------------------------------------------------------------------------------
+
 WITH r AS (
 INSERT INTO rejects (t, tbl,r,fetchlogs_id)
 SELECT

@@ -107,7 +107,6 @@ FROM r;
 -- , -99
 -- , generate_series(now() - '3day'::interval, current_date, '1hour'::interval);
 
-
 WITH inserts AS (
 INSERT INTO measurements (
     sensors_id,
@@ -125,11 +124,14 @@ INSERT INTO measurements (
 FROM meas
 WHERE sensors_id IS NOT NULL
 ON CONFLICT DO NOTHING
-RETURNING sensors_id, datetime
+RETURNING sensors_id, datetime, value, lat, lon
 ), inserted as (
-   INSERT INTO temp_inserted_measurements (sensors_id, datetime)
+   INSERT INTO temp_inserted_measurements (sensors_id, datetime, value, lat, lon)
    SELECT sensors_id
    , datetime
+   , value
+   , lat
+   , lon
    FROM inserts
    RETURNING sensors_id, datetime
 )
@@ -140,6 +142,52 @@ INTO __inserted_start_datetime
 , __inserted_end_datetime
 , __inserted_measurements
 FROM inserted;
+
+-- Now we can use those temp_inserted_measurements to update the cache tables
+INSERT INTO sensors_latest (
+  sensors_id
+  , datetime
+  , value
+  , lat
+  , lon
+  )
+---- identify the row that has the latest value
+WITH numbered AS (
+  SELECT sensors_id
+   , datetime
+   , value
+   , lat
+   , lon
+   , row_number() OVER (PARTITION BY sensors_id ORDER BY datetime DESC) as rn
+  FROM temp_inserted_measurements
+), latest AS (
+---- only insert those rows
+  SELECT sensors_id
+   , datetime
+   , value
+   , lat
+   , lon
+  FROM numbered
+  WHERE rn = 1
+)
+SELECT l.sensors_id
+, l.datetime
+, l.value
+, l.lat
+, l.lon
+FROM latest l
+LEFT JOIN sensors_latest sl ON (l.sensors_id = sl.sensors_id)
+WHERE sl.sensors_id IS NULL
+OR l.datetime > sl.datetime
+ON CONFLICT (sensors_id) DO UPDATE
+SET datetime = EXCLUDED.datetime
+, value = EXCLUDED.value
+, lat = EXCLUDED.lat
+, lon = EXCLUDED.lon
+, modified_on = now()
+--, fetchlogs_id = EXCLUDED.fetchlogs_id
+;
+
 
 --Update the export queue/logs to export these records
 --wrap it in a block just in case the database does not have this module installed
