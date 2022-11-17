@@ -36,8 +36,8 @@ WITH nodes AS (
 INSERT INTO sensor_nodes (
   source_name
 , source_id )
-SELECT split_part(ingest_id, '-', 1) as source_name
-, split_part(ingest_id, '-', 2) as source_id
+SELECT split_ingest_id(ingest_id, 1) as source_name
+, split_ingest_id(ingest_id, 2) as source_id
 FROM meas
 WHERE sensors_id IS NULL
 GROUP BY 1,2
@@ -56,9 +56,9 @@ ON CONFLICT DO NOTHING;
 -- this method depends on us having a match for the parameter
 WITH sen AS (
 SELECT ingest_id
-, split_part(ingest_id, '-', 1) as source_name
-, split_part(ingest_id, '-', 2) as source_id
-, split_part(ingest_id, '-', 3) as parameter
+, split_ingest_id(ingest_id, 1) as source_name
+, split_ingest_id(ingest_id, 2) as source_id
+, split_ingest_id(ingest_id, 3) as parameter
 FROM meas
 WHERE sensors_id IS NULL
 GROUP BY 1,2,3,4)
