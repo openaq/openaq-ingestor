@@ -15,10 +15,10 @@ WHERE ingest_id IS NULL
 OR datetime is NULL
 OR value IS NULL;
 
-DELETE
-FROM meas
-WHERE datetime < '2018-01-01'::timestamptz
-OR datetime>now();
+--DELETE
+--FROM meas
+--WHERE datetime < '2018-01-01'::timestamptz
+--OR datetime>now();
 
 DELETE
 FROM rejects
@@ -117,7 +117,7 @@ INSERT INTO measurements (
 ) SELECT
     --DISTINCT
     sensors_id,
-    datetime,
+    datetime::timestamptz,
     value,
     lon,
     lat

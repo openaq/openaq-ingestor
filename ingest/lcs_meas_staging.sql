@@ -2,7 +2,8 @@ CREATE TEMP TABLE meas (
     ingest_id text,
     sensors_id int,
     value float,
-    datetime timestamptz,
+    --datetime timestamptz,
+    datetime text,
     lon float,
     lat float,
     fetchlogs_id int

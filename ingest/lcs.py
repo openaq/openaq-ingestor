@@ -423,17 +423,16 @@ def get_measurements(key, fetchlogsId):
             row.insert(4, None)
         if row[0] == "" or row[0] is None:
             continue
-        dt = row[2]
+        # dt = row[2]
 
         try:
-            dt = datetime.fromtimestamp(int(dt), timezone.utc)
+            if row[1].isnumeric():
+                dt = dateparser.parse(row[2]).replace(tzinfo=timezone.utc)
+                row[2] = dt.isoformat()
         except Exception:
-            try:
-                dt = dateparser.parse(dt).replace(tzinfo=timezone.utc)
-            except Exception:
-                logger.warning(f"Exception in parsing date for {dt} {Exception}")
-        row[2] = dt.isoformat()
-        # addd the log id for tracing purposes
+            pass
+
+        # add the log id for tracing purposes
         row.insert(5, fetchlogsId)
         ret.append(row)
     logger.info("get_measurements:csv: %s; size: %s; rows: %s; fetching: %0.4f; reading: %0.4f", key, len(content)/1000, len(ret), fetch_time, time() - start)
@@ -494,7 +493,7 @@ def load_measurements_db(limit=250, ascending: bool = False):
         , key
         , last_modified
         FROM fetchlogs
-        WHERE key~E'^lcs-etl-pipeline/measures/.*\\.csv'
+        WHERE key~E'^(lcs-etl-pipeline|uploaded)/measures/.*\\.csv'
         AND completed_datetime is null
         ORDER BY last_modified {order} nulls last
         LIMIT %s
