@@ -145,9 +145,16 @@ if args.id is not None:
     # loop through and check each
     for idx, key in enumerate(keys):
         print(key)
+        if args.download:
+            print(f'downloading: {key}')
+            txt = get_object(key)
+            fpath = os.path.expanduser(f'~/Downloads/{key}')
+            os.makedirs(os.path.dirname(fpath), exist_ok=True)
+            with open(fpath.replace('.gz', ''), 'w') as f:
+                f.write(txt)
         # if we are resubmiting we dont care
         # what type of file it is
-        if args.resubmit:
+        elif args.resubmit:
             mark_success(key, reset=True, message='resubmitting')
         # figure out what type of file it is
         elif 'realtime' in key:
@@ -157,15 +164,6 @@ if args.id is not None:
                 check_realtime_key(key, args.fix)
         else:
             load_measurements([(args.id, key, None)])
-
-        if args.download:
-            print(f'downloading: {key}')
-            txt = get_object(key)
-            fpath = os.path.expanduser(f'~/Downloads/{key}')
-            os.makedirs(os.path.dirname(fpath), exist_ok=True)
-            with open(fpath.replace('.gz',''), 'w') as f:
-                f.write(txt)
-
 
 # Otherwise if we set the summary flag return a daily summary of errors
 elif args.summary:

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import dateparser
 import pytz
 import orjson
+import uuid
 import csv
 from time import time
 from urllib.parse import unquote_plus
@@ -423,16 +424,23 @@ def get_measurements(key, fetchlogsId):
             row.insert(4, None)
         if row[0] == "" or row[0] is None:
             continue
-        # dt = row[2]
+        dt = row[2]
 
         try:
-            if row[1].isnumeric():
-                dt = dateparser.parse(row[2]).replace(tzinfo=timezone.utc)
+            if dt.isnumeric():
+                if len(dt) == 13:
+                    dt = datetime.fromtimestamp(int(dt)/1000.0, timezone.utc)
+                else:
+                    dt = datetime.fromtimestamp(int(dt), timezone.utc)
                 row[2] = dt.isoformat()
         except Exception:
-            pass
+            try:
+                dt = dateparser.parse(dt).replace(tzinfo=timezone.utc)
+            except Exception:
+                logger.warning(f"Exception in parsing date for {dt} {Exception}")
 
-        # add the log id for tracing purposes
+        #row[2] = dt.isoformat()
+        # addd the log id for tracing purposes
         row.insert(5, fetchlogsId)
         ret.append(row)
     logger.info("get_measurements:csv: %s; size: %s; rows: %s; fetching: %0.4f; reading: %0.4f", key, len(content)/1000, len(ret), fetch_time, time() - start)
@@ -487,19 +495,34 @@ def load_measurements_db(limit=250, ascending: bool = False):
     order = 'ASC' if ascending else 'DESC'
     conn = psycopg2.connect(settings.DATABASE_WRITE_URL)
     cur = conn.cursor()
+    batch_uuid = uuid.uuid4().hex
+    pattern = '^lcs-etl-pipeline/measures/.*\\.csv'
+    # pattern = '^uploaded/measures/.*\\.csv'
     cur.execute(
         f"""
-        SELECT fetchlogs_id
-        , key
-        , last_modified
-        FROM fetchlogs
-        WHERE key~E'^(lcs-etl-pipeline|uploaded)/measures/.*\\.csv'
-        AND completed_datetime is null
-        ORDER BY last_modified {order} nulls last
-        LIMIT %s
-        ;
+        UPDATE fetchlogs
+        SET loaded_datetime = CURRENT_TIMESTAMP
+        , jobs = jobs + 1
+        , batch_uuid = %s
+        FROM (
+          SELECT fetchlogs_id
+          FROM fetchlogs
+          WHERE key~E'{pattern}'
+          AND completed_datetime is null
+          AND (
+             loaded_datetime IS NULL
+             OR loaded_datetime < now() - '1hour'::interval
+          )
+          ORDER BY last_modified {order} nulls last
+          LIMIT %s
+          FOR UPDATE SKIP LOCKED
+        ) as q
+        WHERE q.fetchlogs_id = fetchlogs.fetchlogs_id
+        RETURNING fetchlogs.fetchlogs_id
+        , fetchlogs.key
+        , fetchlogs.last_modified;
         """,
-        (limit,),
+        (batch_uuid, limit,),
     )
     rows = cur.fetchall()
     # keys = [r[0] for r in rows]
@@ -550,43 +573,11 @@ def load_measurements(rows):
                 mrows = cursor.rowcount
                 status = cursor.statusmessage
                 logger.debug(f"COPY Rows: {mrows} Status: {status}")
-                cursor.execute(
-                    """
-                    INSERT INTO fetchlogs(
-                        key,
-                        loaded_datetime
-                    ) SELECT key, clock_timestamp()
-                    FROM keys
-                    ON CONFLICT (key) DO
-                    UPDATE
-                        SET
-                        loaded_datetime=EXCLUDED.loaded_datetime
-                    ;
-                    """
-                )
-                connection.commit()
+
                 cursor.execute(get_query("lcs_meas_ingest.sql"))
                 for notice in connection.notices:
                     print(notice)
 
-                #irows = cursor.rowcount
-                #logger.info("load_measurements:insert: %s rows; %0.4f seconds", irows, time() - start)
-                #status = cursor.statusmessage
-                #logger.debug(f"INGEST Rows: {irows} Status: {status}")
-                cursor.execute(
-                    """
-                    INSERT INTO fetchlogs(
-                        key,
-                        completed_datetime
-                    ) SELECT key, clock_timestamp()
-                    FROM keys
-                    ON CONFLICT (key) DO
-                    UPDATE
-                        SET
-                        completed_datetime=EXCLUDED.completed_datetime
-                    ;
-                    """
-                )
                 logger.info(
                     "load_measurements: keys: %s; rows: %s; time: %0.4f",
                     len(rows), mrows, time() - start_time)

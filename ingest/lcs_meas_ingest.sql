@@ -7,6 +7,9 @@ __rejected_measurements int;
 __exported_days int;
 __inserted_start_datetime timestamptz;
 __inserted_end_datetime timestamptz;
+__process_time_ms int;
+__insert_time_ms int;
+__cache_time_ms int;
 BEGIN
 
 DELETE
@@ -79,6 +82,8 @@ FROM sensors s
 WHERE s.source_id=ingest_id
 AND meas.sensors_id IS NULL;
 
+__process_time_ms := 1000 * (extract(epoch FROM clock_timestamp() - __process_start));
+
 -- reject any missing. Most likely due to issues
 -- with the measurand
 WITH r AS (
@@ -94,18 +99,8 @@ RETURNING 1)
 SELECT COUNT(1) INTO __rejected_measurements
 FROM r;
 
-
---DELETE
---FROM meas
---WHERE sensors_id IS NULL;
-
--- --Some fake data to make it easier to test this section
--- TRUNCATE meas;
--- INSERT INTO meas (ingest_id, sensors_id, value, datetime)
--- SELECT 'fake-ingest'
--- , (SELECT sensors_id FROM sensors ORDER BY random() LIMIT 1)
--- , -99
--- , generate_series(now() - '3day'::interval, current_date, '1hour'::interval);
+-- restart the clock to measure just inserts
+__process_start := clock_timestamp();
 
 WITH inserts AS (
 INSERT INTO measurements (
@@ -117,7 +112,7 @@ INSERT INTO measurements (
 ) SELECT
     --DISTINCT
     sensors_id,
-    datetime::timestamptz,
+    datetime,
     value,
     lon,
     lat
@@ -143,6 +138,33 @@ INTO __inserted_start_datetime
 , __inserted_measurements
 FROM inserted;
 
+__insert_time_ms := 1000 * (extract(epoch FROM clock_timestamp() - __process_start));
+
+-- mark the fetchlogs as done
+WITH inserted AS (
+  SELECT m.fetchlogs_id
+  , COUNT(m.*) as n_records
+  , COUNT(t.*) as n_inserted
+  , MIN(m.datetime) as fr_datetime
+  , MAX(m.datetime) as lr_datetime
+  , MIN(t.datetime) as fi_datetime
+  , MAX(t.datetime) as li_datetime
+  FROM meas m
+  LEFT JOIN temp_inserted_measurements t ON (t.sensors_id = m.sensors_id AND t.datetime = m.datetime)
+  GROUP BY m.fetchlogs_id)
+UPDATE fetchlogs
+SET completed_datetime = CURRENT_TIMESTAMP
+, inserted = COALESCE(n_inserted, 0)
+, records = COALESCE(n_records, 0)
+, first_recorded_datetime = fr_datetime
+, last_recorded_datetime = lr_datetime
+, first_inserted_datetime = fi_datetime
+, last_inserted_datetime = li_datetime
+FROM inserted
+WHERE inserted.fetchlogs_id = fetchlogs.fetchlogs_id;
+
+-- track the time required to update cache tables
+__process_start := clock_timestamp();
 -- Now we can use those temp_inserted_measurements to update the cache tables
 INSERT INTO sensors_latest (
   sensors_id
@@ -214,13 +236,18 @@ RETURNING 1)
 SELECT COUNT(1) INTO __exported_days
 FROM e;
 
-RAISE NOTICE 'inserted-measurements: %, inserted-from: %, inserted-to: %, rejected-measurements: %, exported-sensor-days: %, process-time-ms: %, source: lcs'
+__cache_time_ms := 1000 * (extract(epoch FROM clock_timestamp() - __process_start));
+
+
+RAISE NOTICE 'inserted-measurements: %, inserted-from: %, inserted-to: %, rejected-measurements: %, exported-sensor-days: %, process-time-ms: %, insert-time-ms: %, cache-time-ms: %, source: lcs'
       , __inserted_measurements
       , __inserted_start_datetime
       , __inserted_end_datetime
       , __rejected_measurements
       , __exported_days
-      , 1000 * (extract(epoch FROM clock_timestamp() - __process_start));
+      , __process_time_ms
+      , __insert_time_ms
+      , __cache_time_ms;
 
 EXCEPTION WHEN OTHERS THEN
  RAISE NOTICE 'Failed to export to logs: %', SQLERRM

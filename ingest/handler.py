@@ -47,24 +47,29 @@ def handler(event, context):
                             )
 
                             try:
+                                file_size = lov2["Contents"][0]["Size"]
                                 last_modified = lov2["Contents"][0]["LastModified"]
                             except KeyError:
                                 logger.error("""
-                                could not get last modified time from obj
+                                could not get info from obj
                                 """)
+                                file_size = None
                                 last_modified = datetime.now().replace(
                                     tzinfo=timezone.utc
                                 )
 
                             cursor.execute(
                                 """
-                                INSERT INTO fetchlogs (key, last_modified)
-                                VALUES(%s, %s)
+                                INSERT INTO fetchlogs (key
+                                , file_size
+                                , last_modified
+                                )
+                                VALUES(%s, %s, %s)
                                 ON CONFLICT (key) DO UPDATE
                                 SET last_modified=EXCLUDED.last_modified,
                                 completed_datetime=NULL RETURNING *;
                                 """,
-                                (key, last_modified,),
+                                (key, file_size, last_modified,),
                             )
                             row = cursor.fetchone()
                             connection.commit()
@@ -123,8 +128,12 @@ def cronhandler(event, context):
                 """
                 SELECT count(*)
                 FROM fetchlogs
-                WHERE completed_datetime is null
-                AND key ~*'measures';
+                WHERE key ~*'measures'
+                AND completed_datetime is null
+                AND (
+                  loaded_datetime IS NULL
+                  OR loaded_datetime < now() - '1hour'::interval
+                );
                 """,
             )
             pipeline = cursor.fetchone()
