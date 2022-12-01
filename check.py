@@ -67,11 +67,8 @@ from ingest.handler import cronhandler, logger
 from ingest.settings import settings
 
 from ingest.lcs import (
-    load_metadata_db,
-    load_measurements_db,
-    load_measurements_file,
+    load_metadata,
     load_measurements,
-    get_measurements,
 )
 
 from ingest.fetch import (
@@ -162,8 +159,14 @@ if args.id is not None:
                 load_realtime([key])
             else:
                 check_realtime_key(key, args.fix)
+        elif 'stations' in key:
+            load_metadata([
+                {"id": args.id, "Key": key, "LastModified": None}
+            ])
         else:
-            load_measurements([(args.id, key, None)])
+            load_measurements([
+                (args.id, key, None)
+            ])
 
 # Otherwise if we set the summary flag return a daily summary of errors
 elif args.summary:

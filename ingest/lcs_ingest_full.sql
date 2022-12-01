@@ -46,6 +46,8 @@ INSERT INTO sensor_nodes (
 , geom
 , metadata
 , source_id
+, timezones_id
+, providers_id
 )
 SELECT site_name
 , source_name
@@ -53,14 +55,18 @@ SELECT site_name
 , geom
 , metadata
 , ingest_id
+, get_timezones_id(geom)
+, get_providers_id(source_name)
 FROM ms_sensornodes
-GROUP BY site_name, source_name, ismobile, geom, metadata, ingest_id
+GROUP BY 1,2,3,4,5,6,7,8
 ON CONFLICT (source_name, source_id) DO UPDATE
 SET
-    site_name=coalesce(EXCLUDED.site_name,sensor_nodes.site_name),
-    ismobile=coalesce(EXCLUDED.ismobile,sensor_nodes.ismobile),
-    geom=coalesce(EXCLUDED.geom,sensor_nodes.geom),
-    metadata=COALESCE(sensor_nodes.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}')
+    site_name=coalesce(EXCLUDED.site_name,sensor_nodes.site_name)
+    , ismobile=coalesce(EXCLUDED.ismobile,sensor_nodes.ismobile)
+    , geom=coalesce(EXCLUDED.geom,sensor_nodes.geom)
+    , metadata=COALESCE(sensor_nodes.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}')
+    , timezones_id = COALESCE(EXCLUDED.timezones_id, sensor_nodes.timezones_id)
+    , providers_id = COALESCE(EXCLUDED.providers_id, sensor_nodes.providers_id)
 RETURNING 1)
 SELECT COUNT(1) INTO __inserted_nodes
 FROM inserts;

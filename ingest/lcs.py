@@ -349,9 +349,15 @@ def load_metadata_db(count=250, ascending: bool = False):
             for notice in connection.notices:
                 logger.debug(notice)
     if len(contents) > 0:
-        data = LCSData(contents)
-        data.get_metadata()
+        load_metadata(contents)
+        # data = LCSData(contents)
+        # data.get_metadata()
     return rowcount
+
+
+def load_metadata(keys):
+    data = LCSData(keys)
+    data.get_metadata()
 
 
 def select_object(key):
@@ -449,6 +455,7 @@ def get_measurements(key, fetchlogsId):
 
 def submit_file_error(key, e):
     """Update the log to reflect the error and prevent a retry"""
+    logger.error(f"{key}: {e}")
     with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
         connection.set_session(autocommit=True)
         with connection.cursor() as cursor:
@@ -458,9 +465,10 @@ def submit_file_error(key, e):
                 SET completed_datetime = clock_timestamp()
                 , last_message = %s
                 WHERE key = %s
-                """
-            ),
-            (f"ERROR: {e}", key),
+                """,
+                (f"ERROR: {e}", key),
+            )
+
 
 def to_tsv(row):
     tsv = "\t".join(map(clean_csv_value, row)) + "\n"
