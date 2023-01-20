@@ -17,6 +17,7 @@ from .utils import (
     get_query,
     load_fail,
     load_success,
+    load_fetchlogs,
 )
 
 app = typer.Typer()
@@ -87,10 +88,13 @@ def parse_json(j, key: str = None):
 
 
 def create_staging_table(cursor):
-    cursor.execute(get_query("fetch_staging.sql"))
+    cursor.execute(get_query(
+        "fetch_staging.sql",
+        table="TEMP TABLE" if settings.USE_TEMP_TABLES else 'TABLE'
+    ))
 
 
-def copy_data(cursor, key):
+def copy_data(cursor, key, fetchlogsId=None):
     obj = s3.Object(FETCH_BUCKET, key)
     # This should not be checked here,
     # if we ask it to copy data it should do that
@@ -104,11 +108,13 @@ def copy_data(cursor, key):
     logger.debug(f"Copying data for {key}")
     with gzip.GzipFile(fileobj=obj.get()["Body"]) as gz:
         f = io.BufferedReader(gz)
+        # make sure that the file is complete
         iterator = StringIteratorIO(
-            (parse_json(orjson.loads(line)) for line in f)
+            (f"{fetchlogsId}\t"+parse_json(orjson.loads(line)) for line in f)
         )
         query = """
         COPY tempfetchdata (
+        fetchlogs_id,
         location,
         value,
         unit,
@@ -141,11 +147,17 @@ def copy_file(cursor, file):
             # load_success(cursor, file)
 
         except Exception as e:
+            logger.warning(f'File copy failed: {e}')
             load_fail(cursor, file, e)
 
 
 def process_data(cursor):
-    query = get_query("fetch_ingest_full.sql")
+    # see file for details on how
+    # to use the variables
+    query = get_query(
+        "fetch_ingest_full.sql",
+        table="TEMP TABLE" if settings.USE_TEMP_TABLES else 'TABLE'
+    )
     cursor.execute(query)
     # if results:
     #    mindate, maxdate = results
@@ -272,43 +284,23 @@ def submit_file_error(ids, e):
 
 @app.command()
 def load_db(limit: int = 50, ascending: bool = False):
-    order = 'ASC' if ascending else 'DESC'
-    with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-        connection.set_session(autocommit=True)
-        with connection.cursor() as cursor:
-            cursor.execute(
-                f"""
-                SELECT key
-                ,last_modified
-                ,fetchlogs_id
-                FROM fetchlogs
-                WHERE key~E'^realtime-gzipped/.*\\.ndjson.gz$'
-                AND completed_datetime is null
-                ORDER BY last_modified {order} nulls last
-                LIMIT %s
-                ;
-                """,
-                (limit,),
-            )
-            rows = cursor.fetchall()
-            keys = [r[0] for r in rows]
-            if len(keys) > 0:
-                try:
-                    load_realtime(keys)
-                except Exception as e:
-                    # catch and continue to next page
-                    ids = [r[2] for r in rows]
-                    logger.error(f"""
-                    Error processing realtime files: {e}, {ids}
-                    """)
-                    submit_file_error(ids, e)
-                finally:
-                    connection.commit()
+    pattern = '^realtime-gzipped/.*\\.ndjson.gz$'
+    rows = load_fetchlogs(pattern, limit, ascending)
+    if len(rows) > 0:
+        try:
+            load_realtime(rows)
+        except Exception as e:
+            # catch and continue to next page
+            ids = [r[2] for r in rows]
+            logger.error(f"""
+            Error processing realtime files: {e}, {ids}
+            """)
+            submit_file_error(ids, e)
 
-            return len(keys)
+    return len(rows)
 
 
-def load_realtime(keys):
+def load_realtime(rows):
     # create a connection and share for all keys
     with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
         connection.set_session(autocommit=True)
@@ -316,15 +308,30 @@ def load_realtime(keys):
             # create all the data staging table
             create_staging_table(cursor)
             # now copy all the data
-            for key in keys:
-                copy_data(cursor, key)
+            keys = []
+
+            for row in rows:
+                key = row[1]
+                fetchlogsId = row[0]
+                try:
+                    copy_data(cursor, key, fetchlogsId)
+                    keys.append(key)
+                except Exception as e:
+                    # all until now is lost
+                    # reset things and try to recover
+                    connection.rollback()
+                    keys = []
+                    load_fail(cursor, fetchlogsId, e)
+                    break
+
             # finally process the data as one
-            process_data(cursor)
-            # we are outputing some stats
-            for notice in connection.notices:
-                print(notice)
-            # mark files as done
-            load_success(cursor, keys)
+            if len(keys) > 0:
+                process_data(cursor)
+                # we are outputing some stats
+                for notice in connection.notices:
+                    print(notice)
+                    # mark files as done
+                    load_success(cursor, keys)
             # close and commit
             connection.commit()
 

@@ -1,15 +1,24 @@
-CREATE TEMP TABLE IF NOT EXISTS ms_sensornodes (
+-- DROP TABLE IF EXISTS
+--   ms_sensornodes
+-- , ms_sensorsystems
+-- , ms_sensors
+-- , meas
+-- , keys
+-- , temp_inserted_measurements;
+
+CREATE {table} IF NOT EXISTS ms_sensornodes (
     sensor_nodes_id int,
     ingest_id text,
     site_name text,
     source_name text,
+    source_id text,
     ismobile boolean,
     geom geometry,
     metadata jsonb,
     fetchlogs_id int
 );
 
-CREATE TEMP TABLE IF NOT EXISTS ms_sensorsystems (
+CREATE {table} IF NOT EXISTS ms_sensorsystems (
     sensor_systems_id int,
     ingest_id text,
     ingest_sensor_nodes_id text,
@@ -18,8 +27,7 @@ CREATE TEMP TABLE IF NOT EXISTS ms_sensorsystems (
     fetchlogs_id int
 );
 
-
-CREATE TEMP TABLE IF NOT EXISTS ms_sensors (
+CREATE {table} IF NOT EXISTS ms_sensors (
     ingest_id text,
     sensors_id int,
     sensor_systems_id int,
@@ -31,7 +39,7 @@ CREATE TEMP TABLE IF NOT EXISTS ms_sensors (
     fetchlogs_id int
 );
 
-CREATE TEMP TABLE IF NOT EXISTS meas (
+CREATE {table} IF NOT EXISTS meas (
     ingest_id text,
     sensors_id int,
     value float,
@@ -41,7 +49,7 @@ CREATE TEMP TABLE IF NOT EXISTS meas (
     fetchlogs_id int
 );
 
-CREATE TEMP TABLE IF NOT EXISTS keys (
+CREATE {table} IF NOT EXISTS keys (
     fetchlogs_id int
     , key text
     , last_modified timestamptz
@@ -51,7 +59,7 @@ CREATE TEMP TABLE IF NOT EXISTS keys (
 -- actually been inserted into the measurements table
 -- this is to deal with the overlap that we see in the
 -- incoming files
-CREATE TEMP TABLE IF NOT EXISTS temp_inserted_measurements (
+CREATE {table} IF NOT EXISTS temp_inserted_measurements (
   sensors_id int
   , datetime timestamptz
   , value double precision

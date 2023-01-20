@@ -1,15 +1,24 @@
--- Get sensor systems
+-- lcs_meas_ingest
 DO $$
 DECLARE
 __process_start timestamptz := clock_timestamp();
+__total_measurements int;
 __inserted_measurements int;
-__rejected_measurements int;
+__rejected_measurements int := 0;
+__rejected_nodes int := 0;
+__total_nodes int := 0;
+__updated_nodes int := 0;
+__inserted_nodes int := 0;
 __exported_days int;
+__start_datetime timestamptz;
+__end_datetime timestamptz;
 __inserted_start_datetime timestamptz;
 __inserted_end_datetime timestamptz;
 __process_time_ms int;
 __insert_time_ms int;
 __cache_time_ms int;
+__error_context text;
+__ingest_method text := 'lcs';
 BEGIN
 
 DELETE
@@ -28,6 +37,16 @@ FROM rejects
 WHERE fetchlogs_id IN (SELECT fetchlogs_id FROM meas)
 AND tbl ~* '^meas';
 
+
+SELECT COUNT(1)
+, MIN(datetime)
+, MAX(datetime)
+INTO __total_measurements
+, __start_datetime
+, __end_datetime
+FROM meas;
+
+
 UPDATE meas
 SET sensors_id=s.sensors_id
 FROM sensors s
@@ -38,14 +57,19 @@ WHERE s.source_id=ingest_id;
 WITH nodes AS (
 INSERT INTO sensor_nodes (
   source_name
-, source_id )
+, site_name
+, source_id
+, metadata)
 SELECT split_ingest_id(ingest_id, 1) as source_name
+, split_ingest_id(ingest_id, 2) as site_name
 , split_ingest_id(ingest_id, 2) as source_id
+, jsonb_build_object('fetchlogs_id', MIN(fetchlogs_id))
 FROM meas
 WHERE sensors_id IS NULL
-GROUP BY 1,2
+GROUP BY 1,2,3
 ON CONFLICT (source_name, source_id) DO UPDATE
 SET source_id = EXCLUDED.source_id
+, metadata = EXCLUDED.metadata||COALESCE(sensor_nodes.metadata, '{}'::jsonb)
 RETURNING sensor_nodes_id, source_id)
 INSERT INTO sensor_systems (
   sensor_nodes_id
@@ -58,13 +82,14 @@ ON CONFLICT DO NOTHING;
 -- now create a sensor for each
 -- this method depends on us having a match for the parameter
 WITH sen AS (
-SELECT ingest_id
-, split_ingest_id(ingest_id, 1) as source_name
-, split_ingest_id(ingest_id, 2) as source_id
-, split_ingest_id(ingest_id, 3) as parameter
-FROM meas
-WHERE sensors_id IS NULL
-GROUP BY 1,2,3,4)
+  SELECT ingest_id
+  , split_ingest_id(ingest_id, 1) as source_name
+  , split_ingest_id(ingest_id, 2) as source_id
+  , split_ingest_id(ingest_id, 3) as parameter
+  FROM meas
+  WHERE sensors_id IS NULL
+  GROUP BY 1,2,3,4
+), inserts AS (
 INSERT INTO sensors (sensor_systems_id, measurands_id, source_id)
 SELECT sy.sensor_systems_id
 , m.measurands_id
@@ -73,7 +98,10 @@ FROM sen s
 JOIN measurands_map_view m ON (s.parameter = m.key)
 JOIN sensor_nodes n ON (s.source_name = n.source_name AND s.source_id = n.source_id)
 JOIN sensor_systems sy ON (sy.sensor_nodes_id = n.sensor_nodes_id AND s.source_id = sy.source_id)
-ON CONFLICT DO NOTHING;
+ON CONFLICT DO NOTHING
+RETURNING sensor_systems_id)
+SELECT COUNT(DISTINCT sensor_systems_id) INTO __inserted_nodes
+FROM inserts;
 
 -- try again to find the sensors
 UPDATE meas
@@ -81,6 +109,12 @@ SET sensors_id=s.sensors_id
 FROM sensors s
 WHERE s.source_id=ingest_id
 AND meas.sensors_id IS NULL;
+
+
+SELECT COUNT(DISTINCT sensors_id)
+INTO __total_nodes
+FROM meas;
+
 
 __process_time_ms := 1000 * (extract(epoch FROM clock_timestamp() - __process_start));
 
@@ -165,13 +199,77 @@ WHERE inserted.fetchlogs_id = fetchlogs.fetchlogs_id;
 
 -- track the time required to update cache tables
 __process_start := clock_timestamp();
--- Now we can use those temp_inserted_measurements to update the cache tables
-INSERT INTO sensors_latest (
+
+-- -- Now we can use those temp_inserted_measurements to update the cache tables
+-- INSERT INTO sensors_latest (
+--   sensors_id
+--   , datetime
+--   , value
+--   , lat
+--   , lon
+--   )
+-- ---- identify the row that has the latest value
+-- WITH numbered AS (
+--   SELECT sensors_id
+--    , datetime
+--    , value
+--    , lat
+--    , lon
+--    , row_number() OVER (PARTITION BY sensors_id ORDER BY datetime DESC) as rn
+--   FROM temp_inserted_measurements
+-- ), latest AS (
+-- ---- only insert those rows
+--   SELECT sensors_id
+--    , datetime
+--    , value
+--    , lat
+--    , lon
+--   FROM numbered
+--   WHERE rn = 1
+-- )
+-- SELECT l.sensors_id
+-- , l.datetime
+-- , l.value
+-- , l.lat
+-- , l.lon
+-- FROM latest l
+-- LEFT JOIN sensors_latest sl ON (l.sensors_id = sl.sensors_id)
+-- WHERE sl.sensors_id IS NULL
+-- OR l.datetime > sl.datetime
+-- ON CONFLICT (sensors_id) DO UPDATE
+-- SET datetime = EXCLUDED.datetime
+-- , value = EXCLUDED.value
+-- , lat = EXCLUDED.lat
+-- , lon = EXCLUDED.lon
+-- , modified_on = now()
+-- --, fetchlogs_id = EXCLUDED.fetchlogs_id
+-- ;
+-- update the exceedances
+INSERT INTO sensor_exceedances (sensors_id, threshold_value, datetime_latest)
+  SELECT
+  m.sensors_id
+  , t.value
+  , MAX(datetime)
+  FROM temp_inserted_measurements m
+  JOIN sensors s ON (m.sensors_id = s.sensors_id)
+  JOIN thresholds t ON (s.measurands_id = t.measurands_id)
+  AND m.value > t.value
+  GROUP BY 1, 2
+  ON CONFLICT (sensors_id, threshold_value) DO UPDATE SET
+  datetime_latest = GREATEST(sensor_exceedances.datetime_latest, EXCLUDED.datetime_latest)
+  , updated_on = now();
+
+
+INSERT INTO sensors_rollup (
   sensors_id
-  , datetime
-  , value
-  , lat
-  , lon
+  , datetime_first
+  , datetime_last
+  , value_latest
+  , value_count
+  , value_avg
+  , value_min
+  , value_max
+  , geom_latest
   )
 ---- identify the row that has the latest value
 WITH numbered AS (
@@ -180,6 +278,9 @@ WITH numbered AS (
    , value
    , lat
    , lon
+   , sum(1) OVER (PARTITION BY sensors_id) as value_count
+   , min(datetime) OVER (PARTITION BY sensors_id) as datetime_min
+   , avg(value) OVER (PARTITION BY sensors_id) as value_avg
    , row_number() OVER (PARTITION BY sensors_id ORDER BY datetime DESC) as rn
   FROM temp_inserted_measurements
 ), latest AS (
@@ -187,28 +288,54 @@ WITH numbered AS (
   SELECT sensors_id
    , datetime
    , value
+   , value_count
+   , value_avg
+   , datetime_min
    , lat
    , lon
   FROM numbered
   WHERE rn = 1
 )
 SELECT l.sensors_id
-, l.datetime
-, l.value
-, l.lat
-, l.lon
+, l.datetime_min -- first
+, l.datetime -- last
+, l.value -- last value
+, l.value_count
+, l.value_avg
+, l.value -- min
+, l.value -- max
+, public.pt3857(lon, lat)
 FROM latest l
-LEFT JOIN sensors_latest sl ON (l.sensors_id = sl.sensors_id)
-WHERE sl.sensors_id IS NULL
-OR l.datetime > sl.datetime
+LEFT JOIN sensors_rollup sr ON (l.sensors_id = sr.sensors_id)
+WHERE sr.sensors_id IS NULL
+OR l.datetime > sr.datetime_last
+OR l.datetime_min < sr.datetime_first
 ON CONFLICT (sensors_id) DO UPDATE
-SET datetime = EXCLUDED.datetime
-, value = EXCLUDED.value
-, lat = EXCLUDED.lat
-, lon = EXCLUDED.lon
+SET datetime_last = GREATEST(sensors_rollup.datetime_last, EXCLUDED.datetime_last)
+, value_latest = CASE WHEN EXCLUDED.datetime_last > sensors_rollup.datetime_last
+                 THEN EXCLUDED.value_latest
+                 ELSE sensors_rollup.value_latest
+                 END
+, geom_latest = CASE WHEN EXCLUDED.datetime_last > sensors_rollup.datetime_last
+                 THEN EXCLUDED.geom_latest
+                 ELSE sensors_rollup.geom_latest
+                 END
+, value_count = sensors_rollup.value_count + EXCLUDED.value_count
+, value_min = LEAST(sensors_rollup.value_min, EXCLUDED.value_latest)
+, value_max = GREATEST(sensors_rollup.value_max, EXCLUDED.value_latest)
+, datetime_first = LEAST(sensors_rollup.datetime_first, EXCLUDED.datetime_first)
 , modified_on = now()
 --, fetchlogs_id = EXCLUDED.fetchlogs_id
 ;
+
+
+-- Update the table that will help to track hourly rollups
+-- INSERT INTO hourly_stats (datetime)
+--   SELECT date_trunc('hour', datetime)
+--   FROM temp_inserted_measurements
+--   GROUP BY 1
+-- ON CONFLICT (datetime) DO UPDATE
+-- SET modified_on = now();
 
 
 --Update the export queue/logs to export these records
@@ -236,7 +363,87 @@ RETURNING 1)
 SELECT COUNT(1) INTO __exported_days
 FROM e;
 
+
 __cache_time_ms := 1000 * (extract(epoch FROM clock_timestamp() - __process_start));
+
+INSERT INTO ingest_stats (
+    ingest_method
+    -- total
+  , total_measurements_processed
+  , total_measurements_inserted
+  , total_measurements_rejected
+  , total_nodes_processed
+  , total_nodes_inserted
+  , total_nodes_updated
+  , total_nodes_rejected
+  -- total times
+  , total_process_time_ms
+  , total_insert_time_ms
+  , total_cache_time_ms
+  -- latest
+  , latest_measurements_processed
+  , latest_measurements_inserted
+  , latest_measurements_rejected
+  , latest_nodes_processed
+  , latest_nodes_inserted
+  , latest_nodes_updated
+  , latest_nodes_rejected
+  -- times
+  , latest_process_time_ms
+  , latest_insert_time_ms
+  , latest_cache_time_ms
+  ) VALUES (
+  -- totals
+    __ingest_method
+  , __total_measurements
+  , __inserted_measurements
+  , __rejected_measurements
+  , __total_nodes
+  , __inserted_nodes
+  , __updated_nodes
+  , __rejected_nodes
+  -- times
+  , __process_time_ms
+  , __insert_time_ms
+  , __cache_time_ms
+  -- latest
+  , __total_measurements
+  , __inserted_measurements
+  , __rejected_measurements
+  , __total_nodes
+  , __inserted_nodes
+  , __updated_nodes
+  , __rejected_nodes
+  -- times
+  , __process_time_ms
+  , __insert_time_ms
+  , __cache_time_ms
+) ON CONFLICT (ingest_method) DO UPDATE SET
+  -- totals
+   total_measurements_processed = ingest_stats.total_measurements_processed + EXCLUDED.total_measurements_processed
+ , total_measurements_inserted = ingest_stats.total_measurements_inserted + EXCLUDED.total_measurements_inserted
+ , total_measurements_rejected = ingest_stats.total_measurements_rejected + EXCLUDED.total_measurements_rejected
+ , total_nodes_processed = ingest_stats.total_nodes_processed + EXCLUDED.total_nodes_processed
+ , total_nodes_inserted = ingest_stats.total_nodes_inserted + EXCLUDED.total_nodes_inserted
+ , total_nodes_updated = ingest_stats.total_nodes_updated + EXCLUDED.total_nodes_updated
+ , total_nodes_rejected = ingest_stats.total_nodes_rejected + EXCLUDED.total_nodes_rejected
+ , total_process_time_ms = ingest_stats.total_process_time_ms + EXCLUDED.total_process_time_ms
+ , total_insert_time_ms = ingest_stats.total_insert_time_ms + EXCLUDED.total_insert_time_ms
+ , total_cache_time_ms = ingest_stats.total_cache_time_ms + EXCLUDED.total_cache_time_ms
+ -- latest
+ , latest_measurements_processed = EXCLUDED.latest_measurements_processed
+ , latest_measurements_inserted = EXCLUDED.latest_measurements_inserted
+ , latest_measurements_rejected = EXCLUDED.latest_measurements_rejected
+ , latest_nodes_processed = EXCLUDED.latest_nodes_processed
+ , latest_nodes_inserted = EXCLUDED.latest_nodes_inserted
+ , latest_nodes_updated = EXCLUDED.latest_nodes_updated
+ , latest_nodes_rejected = EXCLUDED.latest_nodes_rejected
+ -- times
+ , latest_process_time_ms = EXCLUDED.latest_process_time_ms
+ , latest_insert_time_ms = EXCLUDED.latest_insert_time_ms
+ , latest_cache_time_ms = EXCLUDED.latest_cache_time_ms
+ , ingest_count = ingest_stats.ingest_count + 1
+ , ingested_on = EXCLUDED.ingested_on;
 
 
 RAISE NOTICE 'inserted-measurements: %, inserted-from: %, inserted-to: %, rejected-measurements: %, exported-sensor-days: %, process-time-ms: %, insert-time-ms: %, cache-time-ms: %, source: lcs'
@@ -249,8 +456,9 @@ RAISE NOTICE 'inserted-measurements: %, inserted-from: %, inserted-to: %, reject
       , __insert_time_ms
       , __cache_time_ms;
 
+
 EXCEPTION WHEN OTHERS THEN
- RAISE NOTICE 'Failed to export to logs: %', SQLERRM
- USING HINT = 'Make sure that the open data module is installed';
+ GET STACKED DIAGNOSTICS __error_context = PG_EXCEPTION_CONTEXT;
+ RAISE NOTICE 'Failed to ingest measurements: %, %', SQLERRM, __error_context;
 
 END $$;

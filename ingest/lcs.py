@@ -15,7 +15,13 @@ import psycopg2
 import typer
 from io import StringIO
 from .settings import settings
-from .utils import get_query, clean_csv_value, StringIteratorIO, fix_units
+from .utils import (
+    get_query,
+    clean_csv_value,
+    StringIteratorIO,
+    fix_units,
+    load_fetchlogs,
+)
 
 s3 = boto3.resource("s3")
 s3c = boto3.client("s3")
@@ -92,7 +98,7 @@ class LCSData:
             self.systems.append(system)
 
     def node(self, j):
-        node = {}
+        node = {"fetchlogs_id": None}
         metadata = {}
         if "sensor_node_id" in j:
             id = j["sensor_node_id"]
@@ -100,9 +106,7 @@ class LCSData:
             return None
         # if we have passed the fetchlogs_id we should track it
         if "fetchlogs_id" in j:
-            fetchlogsId = j["fetchlogs_id"]
-        else:
-            fetchlogsId = None
+            node["fetchlogs_id"] = j["fetchlogs_id"]
 
         for key, value in j.items():
             key = str.replace(key, "sensor_node_", "")
@@ -123,7 +127,7 @@ class LCSData:
                 except Exception:
                     node["geom"] = None
             elif key == "sensor_systems":
-                self.system(value, id, fetchlogsId)
+                self.system(value, id, node["fetchlogs_id"])
             else:
                 metadata[key] = value
         node["metadata"] = orjson.dumps(metadata).decode()
@@ -160,7 +164,7 @@ class LCSData:
                 self.node(obj)
 
     def load_data(self):
-        logger.debug(f"load_data: {self.keys}")
+        logger.debug(f"load_data: {self.keys}, {self.nodes}")
         with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
             connection.set_session(autocommit=True)
             with connection.cursor() as cursor:
@@ -248,17 +252,12 @@ class LCSData:
     def process_data(self, cursor):
         query = get_query("lcs_ingest_full.sql")
         cursor.execute(query)
-        # query = get_query("lcs_ingest_nodes.sql")
-        # cursor.execute(query)
-
-        # query = get_query("lcs_ingest_systems.sql")
-        # cursor.execute(query)
-
-        # query = get_query("lcs_ingest_sensors.sql")
-        # cursor.execute(query)
 
     def create_staging_table(self, cursor):
-        cursor.execute(get_query("lcs_staging.sql"))
+        cursor.execute(get_query(
+            "lcs_staging.sql",
+            table="TEMP TABLE" if settings.USE_TEMP_TABLES else 'TABLE'
+        ))
 
     def get_metadata(self):
         hasnew = False
@@ -475,17 +474,15 @@ def to_tsv(row):
     return tsv
     return ""
 
+
 def load_measurements_file(fetchlogs_id: int):
     with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
         connection.set_session(autocommit=True)
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT key
-                , init_datetime
-                , loaded_datetime
-                , completed_datetime
-                , last_message
+                SELECT fetchlogs_id
+                , key
                 FROM fetchlogs
                 WHERE fetchlogs_id = %s
                 LIMIT 1
@@ -494,49 +491,29 @@ def load_measurements_file(fetchlogs_id: int):
                 (fetchlogs_id,),
             )
             rows = cursor.fetchall()
-            print(rows)
-            keys = [r[0] for r in rows]
-            load_measurements(keys)
+            load_measurements(rows)
+
+
+def load_measurements_batch(batch: str):
+    with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
+        connection.set_session(autocommit=True)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT fetchlogs_id
+                , key
+                FROM fetchlogs
+                WHERE batch_uuid = %s
+                """,
+                (batch,),
+            )
+            rows = cursor.fetchall()
+            load_measurements(rows)
 
 
 def load_measurements_db(limit=250, ascending: bool = False):
-    order = 'ASC' if ascending else 'DESC'
-    conn = psycopg2.connect(settings.DATABASE_WRITE_URL)
-    cur = conn.cursor()
-    batch_uuid = uuid.uuid4().hex
     pattern = '^lcs-etl-pipeline/measures/.*\\.csv'
-    # pattern = '^uploaded/measures/.*\\.csv'
-    cur.execute(
-        f"""
-        UPDATE fetchlogs
-        SET loaded_datetime = CURRENT_TIMESTAMP
-        , jobs = jobs + 1
-        , batch_uuid = %s
-        FROM (
-          SELECT fetchlogs_id
-          FROM fetchlogs
-          WHERE key~E'{pattern}'
-          AND completed_datetime is null
-          AND (
-             loaded_datetime IS NULL
-             OR loaded_datetime < now() - '1hour'::interval
-          )
-          ORDER BY last_modified {order} nulls last
-          LIMIT %s
-          FOR UPDATE SKIP LOCKED
-        ) as q
-        WHERE q.fetchlogs_id = fetchlogs.fetchlogs_id
-        RETURNING fetchlogs.fetchlogs_id
-        , fetchlogs.key
-        , fetchlogs.last_modified;
-        """,
-        (batch_uuid, limit,),
-    )
-    rows = cur.fetchall()
-    # keys = [r[0] for r in rows]
-    conn.commit()
-    cur.close()
-    conn.close()
+    rows = load_fetchlogs(pattern, limit, ascending)
     load_measurements(rows)
     return len(rows)
 
@@ -557,13 +534,15 @@ def load_measurements(rows):
     logger.info("load_measurements:get: %s keys; %s rows; %0.4f seconds",
                 len(rows), len(data), time() - start_time)
     if len(data) > 0:
-
         with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
             connection.set_session(autocommit=True)
             with connection.cursor() as cursor:
 
-                cursor.execute(get_query("lcs_staging.sql"))
-                start = time()
+                cursor.execute(get_query(
+                    "lcs_staging.sql",
+                    table="TEMP TABLE"
+                ))
+
                 write_csv(
                     cursor, new, "keys", ["key",],
                 )

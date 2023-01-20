@@ -16,6 +16,8 @@ parser = argparse.ArgumentParser(
     """)
 parser.add_argument('--id', type=int, required=False,
                     help='The fetchlogs_id value')
+parser.add_argument('--batch', type=str, required=False,
+                    help='The batch id value. Loads files based on batch uuid.')
 parser.add_argument('--env', type=str, required=False,
                     help='The dot env file to use')
 parser.add_argument('--profile', type=str, required=False,
@@ -24,11 +26,11 @@ parser.add_argument('--n', type=int, required=False, default=30,
                     help="""Either the number of entries to list
                     (sorted by date) or the number of days to go
                     back if using the summary or rejects arguments""")
-parser.add_argument('--pipeline', type=int, required=False, default=1,
+parser.add_argument('--pipeline', type=int, required=False, default=0,
                     help="""The number of pipeline files to load at a time""")
-parser.add_argument('--metadata', type=int, required=False, default=1,
+parser.add_argument('--metadata', type=int, required=False, default=0,
                     help="""The number of metadata files to load at a time""")
-parser.add_argument('--realtime', type=int, required=False, default=1,
+parser.add_argument('--realtime', type=int, required=False, default=0,
                     help="""The number of realtime files to load at a time""")
 parser.add_argument('--fix', action="store_true",
                     help='Automatically attempt to fix the problem')
@@ -69,6 +71,7 @@ from ingest.settings import settings
 from ingest.lcs import (
     load_metadata,
     load_measurements,
+    load_measurements_batch,
 )
 
 from ingest.fetch import (
@@ -156,7 +159,9 @@ if args.id is not None:
         # figure out what type of file it is
         elif 'realtime' in key:
             if args.load:
-                load_realtime([key])
+                load_realtime([
+                    (args.id, key, None)
+                ])
             else:
                 check_realtime_key(key, args.fix)
         elif 'stations' in key:
@@ -167,6 +172,9 @@ if args.id is not None:
             load_measurements([
                 (args.id, key, None)
             ])
+
+elif args.batch is not None:
+    load_measurements_batch(args.batch)
 
 # Otherwise if we set the summary flag return a daily summary of errors
 elif args.summary:

@@ -1,4 +1,4 @@
--- Get sensor systems
+-- lcs_ingest_full
 DO $$
 DECLARE
 __process_start timestamptz := clock_timestamp();
@@ -29,12 +29,25 @@ FROM ms_sensors
 WHERE ms_sensors.ingest_id IS NULL
 OR ingest_sensor_systems_id IS NULL;
 
+-- first thing we want to do is to get the source
+-- and the source_id from the ingest id
+-- adding the station forces our method to treat the station as the parameter
+-- the first section as the source name and then the rest as teh source id
+-- this is required for ingest_ids that use `-` in the source_id
+-- e.g. something-blah-blah-blah-pm10
+-- where the sensor node ingest id would be
+-- something-blah-blah-blah
+-- and blah could be read as a paramter value
+UPDATE ms_sensornodes
+SET source_id = split_ingest_id(ingest_id||'-station', 2);
+
+
 -- match the sensor nodes to get the sensor_nodes_id
 UPDATE ms_sensornodes
 SET sensor_nodes_id = sensor_nodes.sensor_nodes_id
 FROM sensor_nodes
 WHERE sensor_nodes.source_name = ms_sensornodes.source_name
-AND sensor_nodes.source_id = ms_sensornodes.ingest_id;
+AND sensor_nodes.source_id = ms_sensornodes.source_id;
 
 -- And now we insert those into the sensor nodes table
 -- we are gouping to deal with any duplicates that currently exist
@@ -48,15 +61,17 @@ INSERT INTO sensor_nodes (
 , source_id
 , timezones_id
 , providers_id
+, countries_id
 )
 SELECT site_name
 , source_name
 , ismobile
 , geom
 , metadata
-, ingest_id
+, source_id
 , get_timezones_id(geom)
 , get_providers_id(source_name)
+, get_countries_id(geom)
 FROM ms_sensornodes
 GROUP BY 1,2,3,4,5,6,7,8
 ON CONFLICT (source_name, source_id) DO UPDATE
@@ -67,6 +82,7 @@ SET
     , metadata=COALESCE(sensor_nodes.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}')
     , timezones_id = COALESCE(EXCLUDED.timezones_id, sensor_nodes.timezones_id)
     , providers_id = COALESCE(EXCLUDED.providers_id, sensor_nodes.providers_id)
+    , modified_on = now()
 RETURNING 1)
 SELECT COUNT(1) INTO __inserted_nodes
 FROM inserts;
@@ -81,7 +97,7 @@ SET sensor_nodes_id = sensor_nodes.sensor_nodes_id
 FROM sensor_nodes
 WHERE ms_sensornodes.sensor_nodes_id is null
 AND sensor_nodes.source_name = ms_sensornodes.source_name
-AND sensor_nodes.source_id = ms_sensornodes.ingest_id;
+AND sensor_nodes.source_id = ms_sensornodes.source_id;
 
 -- log anything we were not able to get an id for
 WITH r AS (
@@ -130,7 +146,8 @@ FROM ms_sensorsystems
 WHERE sensor_nodes_id IS NOT NULL
 GROUP BY sensor_nodes_id, ingest_id, metadata
 ON CONFLICT (sensor_nodes_id, source_id) DO UPDATE SET
-    metadata=COALESCE(sensor_systems.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}');
+    metadata=COALESCE(sensor_systems.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}')
+    , modified_on = now();
 
 ----------------------------
 -- lcs_ingest_sensors.sql --

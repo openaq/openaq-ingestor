@@ -4,6 +4,7 @@ from pathlib import Path
 import logging
 from urllib.parse import unquote_plus
 import gzip
+import uuid
 
 import boto3
 from io import StringIO
@@ -107,7 +108,7 @@ def clean_csv_value(value):
 
 
 def get_query(file, **params):
-    logger.debug("get_query: {file}, params: {params}")
+    logger.debug(f"get_query: {file}, params: {params}")
     query = Path(os.path.join(dir_path, file)).read_text()
     if params is not None and len(params) >= 1:
         query = query.format(**params)
@@ -392,38 +393,21 @@ def load_errors_list(limit: int = 10):
             return rows
 
 
-def load_fail(cursor, key, e):
-    print("full copy failed", key, e)
+def load_fail(cursor, fetchlogsId, e):
+    logger.warning(f"full copy of {fetchlogsId} failed: {e}")
     cursor.execute(
         """
         UPDATE fetchlogs
-        SET
-        last_message=%s
-        WHERE
-        key=%s
+        SET last_message=%s
+        , has_error = true
+        , completed_datetime = clock_timestamp()
+        WHERE fetchlogs_id=%s
         """,
         (
             str(e),
-            key,
+            fetchlogsId,
         ),
     )
-
-
-# def load_success(cursor, key):
-#     cursor.execute(
-#         """
-#         UPDATE fetchlogs
-#         SET
-#         last_message=%s,
-#         loaded_datetime=clock_timestamp()
-#         WHERE
-#         key=%s
-#         """,
-#         (
-#             str(cursor.statusmessage),
-#             key,
-#         ),
-#     )
 
 
 def load_success(cursor, keys, message: str = 'success'):
@@ -433,6 +417,7 @@ def load_success(cursor, keys, message: str = 'success'):
         SET
         last_message=%s
         , completed_datetime=clock_timestamp()
+        , has_error = false
         WHERE key=ANY(%s)
         """,
         (
@@ -440,6 +425,50 @@ def load_success(cursor, keys, message: str = 'success'):
             keys,
         ),
     )
+
+
+def load_fetchlogs(
+        pattern: str,
+        limit: int = 250,
+        ascending: bool = False,
+):
+    order = 'ASC' if ascending else 'DESC'
+    conn = psycopg2.connect(settings.DATABASE_WRITE_URL)
+    cur = conn.cursor()
+    batch_uuid = uuid.uuid4().hex
+    cur.execute(
+        f"""
+        UPDATE fetchlogs
+        SET loaded_datetime = CURRENT_TIMESTAMP
+        , jobs = jobs + 1
+        , batch_uuid = %s
+        FROM (
+          SELECT fetchlogs_id
+          FROM fetchlogs
+          WHERE key~E'{pattern}'
+          AND NOT has_error
+          AND completed_datetime is null
+          AND (
+             loaded_datetime IS NULL
+             OR loaded_datetime < now() - '30min'::interval
+          )
+          ORDER BY last_modified {order} nulls last
+          LIMIT %s
+          FOR UPDATE SKIP LOCKED
+        ) as q
+        WHERE q.fetchlogs_id = fetchlogs.fetchlogs_id
+        RETURNING fetchlogs.fetchlogs_id
+        , fetchlogs.key
+        , fetchlogs.last_modified;
+        """,
+        (batch_uuid, limit,),
+    )
+    rows = cur.fetchall()
+    logger.debug(f'Loaded {len(rows)} from fetchlogs using {pattern}/{order}')
+    conn.commit()
+    cur.close()
+    conn.close()
+    return rows
 
 
 def add_fetchlog(key: str):
@@ -500,6 +529,7 @@ def mark_success(
                 SET
                 last_message=%s
                 , completed_datetime={completed}
+                , has_error = false
                 WHERE {where}
                 """,
                 (
