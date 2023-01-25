@@ -266,6 +266,7 @@ class LCSData:
             id = obj["id"]
             last_modified = obj["LastModified"]
             try:
+                logger.debug(f"Loading station file: {id}:{key}")
                 self.get_station(key, id)
                 self.keys.append(
                     {
@@ -316,45 +317,29 @@ def load_metadata_bucketscan(count=100):
             break
 
 
-def load_metadata_db(count=250, ascending: bool = False):
+def load_metadata_db(limit=250, ascending: bool = False):
     order = 'ASC' if ascending else 'DESC'
-    with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-        connection.set_session(autocommit=True)
-        with connection.cursor() as cursor:
-            cursor.execute(
-                f"""
-                SELECT key
-                , last_modified
-                , fetchlogs_id
-                FROM fetchlogs
-                WHERE key~'lcs-etl-pipeline/stations/'
-                AND completed_datetime is null
-                ORDER BY last_modified {order} nulls last
-                LIMIT %s;
-                """,
-                (count,),
-            )
-            rows = cursor.fetchall()
-            rowcount = cursor.rowcount
-            contents = []
-            for row in rows:
-                contents.append(
-                    {
-                        "Key": unquote_plus(row[0]),
-                        "LastModified": row[1],
-                        "id": row[2],
-                    }
-                )
-            for notice in connection.notices:
-                logger.debug(notice)
+    pattern = 'lcs-etl-pipeline/stations/'
+    rows = load_fetchlogs(pattern, limit, ascending)
+    contents = []
+    for row in rows:
+        logger.debug(row)
+        contents.append(
+            {
+                "Key": unquote_plus(row[1]),
+                "LastModified": row[2],
+                "id": row[0],
+            }
+        )    
     if len(contents) > 0:
         load_metadata(contents)
         # data = LCSData(contents)
         # data.get_metadata()
-    return rowcount
+    return len(rows)
 
 
 def load_metadata(keys):
+    logger.debug(f'Load metadata: {len(keys)}')
     data = LCSData(keys)
     data.get_metadata()
 

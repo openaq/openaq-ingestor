@@ -39,7 +39,10 @@ OR ingest_sensor_systems_id IS NULL;
 -- something-blah-blah-blah
 -- and blah could be read as a paramter value
 UPDATE ms_sensornodes
-SET source_id = split_ingest_id(ingest_id||'-station', 2);
+SET source_id = CASE
+   WHEN source_name ~* 'purpleair|habitatmap' THEN ingest_id
+   ELSE split_ingest_id(ingest_id||'-station', 2)  -- station is a placeholder
+   END;
 
 
 -- match the sensor nodes to get the sensor_nodes_id
