@@ -338,10 +338,49 @@ def load_metadata_db(limit=250, ascending: bool = False):
     return len(rows)
 
 
+def load_metadata_batch(batch: str):
+    with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
+        connection.set_session(autocommit=True)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT key
+                , last_modified
+                , fetchlogs_id
+                FROM fetchlogs
+                WHERE batch_uuid = %s
+                """,
+                (batch,),
+            )
+            rows = cursor.fetchall()
+            rowcount = cursor.rowcount
+            contents = []
+            for row in rows:
+                contents.append(
+                    {
+                        "Key": unquote_plus(row[0]),
+                        "LastModified": row[1],
+                        "id": row[2],
+                    }
+                )
+            for notice in connection.notices:
+                logger.debug(notice)
+    if len(contents) > 0:
+        load_metadata(contents)
+        # data = LCSData(contents)
+        # data.get_metadata()
+    return rowcount
+
+
 def load_metadata(keys):
     logger.debug(f'Load metadata: {len(keys)}')
     data = LCSData(keys)
-    data.get_metadata()
+    try:
+        data.get_metadata()
+    except Exception as e:
+        ids = ','.join([str(k['id']) for k in keys])
+        logger.error(f'load error: {e} ids: {ids}')
+        raise
 
 
 def select_object(key):

@@ -25,6 +25,7 @@ __process_time_ms int;
 __insert_time_ms int;
 __cache_time_ms int;
 __ingest_method text := 'realtime';
+__inserted_spatial_rollups int := 0;
 BEGIN
 
 -- REQUIRED
@@ -243,7 +244,7 @@ __process_time_ms := 1000 * (extract(epoch FROM clock_timestamp() - __process_st
 -- File #5 --
 -------------
 
-DROP TABLE IF EXISTS checkrealtime_matched;
+--DROP TABLE IF EXISTS checkrealtime_matched;
 -- CREATE TABLE IF NOT EXISTS checkrealtime_matched (
 --   sensor_nodes_id int
 -- , site_name text
@@ -729,6 +730,38 @@ SET datetime_last = GREATEST(sensors_rollup.datetime_last, EXCLUDED.datetime_las
 --, fetchlogs_id = EXCLUDED.fetchlogs_id
 ;
 
+\set gridsize 250.0
+
+WITH spatial_inserts AS (
+INSERT INTO sensor_nodes_spatial_rollup (
+sensor_nodes_id
+, geom
+, cell_size
+, start_datetime
+, end_datetime
+, measurements_count
+, added_on)
+SELECT sensor_nodes_id
+, st_snaptogrid(s.geom, :gridsize)
+, :gridsize
+, MIN(datetime) as start_datetime
+, MAX(datetime) as end_datetime
+, COUNT(DISTINCT datetime) as measurements
+, now()
+FROM temp_inserted_measurements
+JOIN tempfetchdata_sensors s USING (sensors_id)
+JOIN sensor_systems ss USING (sensor_systems_id)
+WHERE lat IS NOT NULL
+AND lon IS NOT NULL
+GROUP BY 1,2
+ON CONFLICT (sensor_nodes_id, geom) DO UPDATE SET
+  start_datetime = LEAST(sensor_nodes_spatial_rollup.start_datetime, EXCLUDED.start_datetime)
+, end_datetime = GREATEST(sensor_nodes_spatial_rollup.end_datetime, EXCLUDED.end_datetime)
+, measurements_count = sensor_nodes_spatial_rollup.measurements_count + EXCLUDED.measurements_count
+, modified_on = now()
+RETURNING 1)
+SELECT COUNT(1) INTO __inserted_spatial_rollups
+FROM spatial_inserts;
 
 
 -- Update the table that will help to track hourly rollups
@@ -847,7 +880,7 @@ INSERT INTO ingest_stats (
 
 
 
-RAISE NOTICE 'inserted-measurements: %, deleted-timescaledb: %, deleted-future-measurements: %, deleted-past-measurements: %, from: %, to: %, inserted-from: %, inserted-to: %, updated-nodes: %, inserted-measurements: %, inserted-measurands: %, inserted-nodes: %, rejected-nodes: %, rejected-systems: %, rejected-sensors: %, exported-sensor-days: %, process-time-ms: %, source: fetch'
+RAISE NOTICE 'inserted-measurements: %, deleted-timescaledb: %, deleted-future-measurements: %, deleted-past-measurements: %, from: %, to: %, inserted-from: %, inserted-to: %, updated-nodes: %, inserted-measurements: %, inserted-measurands: %, inserted-nodes: %, rejected-nodes: %, rejected-systems: %, rejected-sensors: %, exported-sensor-days: %, process-time-ms: %, inserted-spatial-rollups: %, source: fetch'
       , __total_measurements
       , __deleted_timescaledb
       , __deleted_future_measurements
@@ -864,6 +897,7 @@ RAISE NOTICE 'inserted-measurements: %, deleted-timescaledb: %, deleted-future-m
       , __rejected_systems
       , __rejected_sensors
       , __exported_days
+      , __inserted_spatial_rollups
       , 1000 * (extract(epoch FROM clock_timestamp() - __process_start));
 
 END $$;

@@ -72,6 +72,7 @@ from ingest.lcs import (
     load_metadata,
     load_measurements,
     load_measurements_batch,
+    load_metadata_batch,
 )
 
 from ingest.fetch import (
@@ -174,7 +175,8 @@ if args.id is not None:
             ])
 
 elif args.batch is not None:
-    load_measurements_batch(args.batch)
+    # load_measurements_batch(args.batch)
+    load_metadata_batch(args.batch)
 
 # Otherwise if we set the summary flag return a daily summary of errors
 elif args.summary:
