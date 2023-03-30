@@ -228,6 +228,7 @@ def get_object(
 
     return text
 
+
 def put_object(
         data: str,
         key: str,

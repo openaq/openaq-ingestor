@@ -36,15 +36,6 @@ BEGIN
 -- File fetch_filter.sql --
 ---------------------------
 
--- This makes sense though we should track in case its systemic
-WITH deletes AS (
-  DELETE
-  FROM tempfetchdata
-  WHERE datetime > now()
-  RETURNING 1)
-SELECT COUNT(1) INTO __deleted_future_measurements
-FROM deletes;
-
 -- this seems questionable, I dont want to pass data to this
 -- process only to have some of it filtered out because its too old
 -- Commenting this out because it will prevent us from submitting patch
@@ -66,7 +57,8 @@ SELECT COUNT(1)
 INTO __total_measurements
 , __start_datetime
 , __end_datetime
-FROM tempfetchdata;
+FROM tempfetchdata
+WHERE datetime <= now();
 
 -- Now we start the old fetch_ingest#.sql files
 -------------
@@ -570,12 +562,21 @@ WHERE sensors_id IS NULL;
 __process_start := clock_timestamp();
 
 
+-- moved down
+-- count the future measurements
+SELECT COUNT(1) INTO __deleted_future_measurements
+FROM tempfetchdata
+WHERE datetime > now()
+;
+
+
 WITH inserts AS (
   INSERT INTO measurements (sensors_id, datetime, value)
   SELECT sensors_id
   , datetime
   , value
   FROM tempfetchdata
+  WHERE datetime <= now()
   ON CONFLICT DO NOTHING
   RETURNING sensors_id, datetime, value
 ), inserted as (
@@ -730,38 +731,37 @@ SET datetime_last = GREATEST(sensors_rollup.datetime_last, EXCLUDED.datetime_las
 --, fetchlogs_id = EXCLUDED.fetchlogs_id
 ;
 
-\set gridsize 250.0
 
-WITH spatial_inserts AS (
-INSERT INTO sensor_nodes_spatial_rollup (
-sensor_nodes_id
-, geom
-, cell_size
-, start_datetime
-, end_datetime
-, measurements_count
-, added_on)
-SELECT sensor_nodes_id
-, st_snaptogrid(s.geom, :gridsize)
-, :gridsize
-, MIN(datetime) as start_datetime
-, MAX(datetime) as end_datetime
-, COUNT(DISTINCT datetime) as measurements
-, now()
-FROM temp_inserted_measurements
-JOIN tempfetchdata_sensors s USING (sensors_id)
-JOIN sensor_systems ss USING (sensor_systems_id)
-WHERE lat IS NOT NULL
-AND lon IS NOT NULL
-GROUP BY 1,2
-ON CONFLICT (sensor_nodes_id, geom) DO UPDATE SET
-  start_datetime = LEAST(sensor_nodes_spatial_rollup.start_datetime, EXCLUDED.start_datetime)
-, end_datetime = GREATEST(sensor_nodes_spatial_rollup.end_datetime, EXCLUDED.end_datetime)
-, measurements_count = sensor_nodes_spatial_rollup.measurements_count + EXCLUDED.measurements_count
-, modified_on = now()
-RETURNING 1)
-SELECT COUNT(1) INTO __inserted_spatial_rollups
-FROM spatial_inserts;
+-- WITH spatial_inserts AS (
+-- INSERT INTO sensor_nodes_spatial_rollup (
+-- sensor_nodes_id
+-- , geom
+-- , cell_size
+-- , start_datetime
+-- , end_datetime
+-- , measurements_count
+-- , added_on)
+-- SELECT sensor_nodes_id
+-- , st_snaptogrid(s.geom, 250)
+-- , 250
+-- , MIN(datetime) as start_datetime
+-- , MAX(datetime) as end_datetime
+-- , COUNT(DISTINCT datetime) as measurements
+-- , now()
+-- FROM temp_inserted_measurements
+-- JOIN tempfetchdata_sensors s USING (sensors_id)
+-- JOIN sensor_systems ss USING (sensor_systems_id)
+-- WHERE lat IS NOT NULL
+-- AND lon IS NOT NULL
+-- GROUP BY 1,2
+-- ON CONFLICT (sensor_nodes_id, geom) DO UPDATE SET
+--   start_datetime = LEAST(sensor_nodes_spatial_rollup.start_datetime, EXCLUDED.start_datetime)
+-- , end_datetime = GREATEST(sensor_nodes_spatial_rollup.end_datetime, EXCLUDED.end_datetime)
+-- , measurements_count = sensor_nodes_spatial_rollup.measurements_count + EXCLUDED.measurements_count
+-- , modified_on = now()
+-- RETURNING 1)
+-- SELECT COUNT(1) INTO __inserted_spatial_rollups
+-- FROM spatial_inserts;
 
 
 -- Update the table that will help to track hourly rollups

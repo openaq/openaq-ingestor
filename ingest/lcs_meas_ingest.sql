@@ -330,12 +330,12 @@ SET datetime_last = GREATEST(sensors_rollup.datetime_last, EXCLUDED.datetime_las
 
 
 -- Update the table that will help to track hourly rollups
--- INSERT INTO hourly_stats (datetime)
---   SELECT date_trunc('hour', datetime)
---   FROM temp_inserted_measurements
---   GROUP BY 1
--- ON CONFLICT (datetime) DO UPDATE
--- SET modified_on = now();
+INSERT INTO hourly_stats (datetime)
+  SELECT date_trunc('hour', datetime)
+  FROM temp_inserted_measurements
+  GROUP BY 1
+ON CONFLICT (datetime) DO UPDATE
+SET modified_on = now();
 
 
 --Update the export queue/logs to export these records
