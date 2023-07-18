@@ -2,6 +2,8 @@
 DO $$
 DECLARE
 __process_start timestamptz := clock_timestamp();
+__min_measurement_date date := '1970-01-01'::date;
+__max_measurement_date date := current_date + 1;
 __total_measurements int;
 __total_nodes int;
 __updated_nodes int;
@@ -48,8 +50,15 @@ BEGIN
 -- SELECT COUNT(1) INTO __deleted_past_measurements
 -- FROM deletes;
 
-----------------------------------
+-- use the partitions to determine start and end date
+SELECT partition_start_date
+	, partition_end_date
+INTO __min_measurement_date
+	, __max_measurement_date
+FROM data_table_stats
+WHERE table_name = 'public.measurements';
 
+---------------------------------
 -- start with simple count
 SELECT COUNT(1)
 , MIN(datetime)
@@ -169,7 +178,7 @@ SELECT * FROM (SELECT
 FROM tempfetchdata_sensors
 WHERE geom IS NOT NULL
 GROUP BY
-    1,2,3,4,5,6,7,8,9,st_snaptogrid(geom, .0001)
+    1,2,3,4,5,6,7,8,9,st_snaptogrid(geom, .00001)
 ) AS wgeom
 UNION ALL
 SELECT * FROM
@@ -303,7 +312,8 @@ UPDATE sensor_nodes s SET
     , providers_id = get_providers_id(COALESCE(t.source_name, s.source_name))
     , modified_on = now()
 FROM tempfetchdata_nodes t
-WHERE t.sensor_nodes_id = s.sensor_nodes_id AND
+WHERE t.sensor_nodes_id = s.sensor_nodes_id
+AND
 (
     (s.geom IS NULL and t.geom IS NOT NULL)
 OR
@@ -315,7 +325,7 @@ OR
         t.source_name,
         t.city,
         t.country,
-        t.metadata
+        t.metadata - ARRAY['imported','fetchlogs_id']::text[]
     ) IS DISTINCT FROM (
         s.sensor_nodes_id,
         s.ismobile,
@@ -323,12 +333,61 @@ OR
         s.source_name,
         s.city,
         s.country,
-        s.metadata - 'timezone'
+        s.metadata - ARRAY['imported','fetchlogs_id']::text[]
     )
 )
 RETURNING 1)
 SELECT COUNT(1) INTO __updated_nodes
 FROM updates;
+
+
+-- SELECT s.sensor_nodes_id
+-- , t.site_name
+-- , s.site_name
+-- , t.metadata - ARRAY['imported','fetchlogs_id']::text[] as temp
+-- , s.metadata - ARRAY['imported','fetchlogs_id']::text[] as node
+-- FROM tempfetchdata_nodes t
+-- JOIN sensor_nodes s ON (t.sensor_nodes_id = s.sensor_nodes_id)
+-- WHERE (s.geom IS NULL and t.geom IS NOT NULL)
+-- OR
+--     ROW (
+--        t.sensor_nodes_id,
+--       --  t.ismobile,
+--       --  t.site_name,
+--       --  t.source_name,
+--       --  t.city,
+--        -- t.country,
+--         t.metadata - ARRAY['imported','fetchlogs_id']::text[]
+--     ) IS DISTINCT FROM (
+--        s.sensor_nodes_id,
+--       --  s.ismobile,
+--       --  s.site_name,
+--       --  s.source_name,
+--       --  s.city,
+--       -- s.country,
+--         s.metadata - ARRAY['imported','fetchlogs_id']::text[]
+--     )
+-- LIMIT 20;
+
+-- SELECT h.site_name
+-- , n.site_name
+-- , st_astext(h.geom)
+-- , st_astext(n.geom)
+-- , h.origin
+-- , n.origin
+-- , h.metadata - ARRAY['imported','fetchlogs_id']::text[] as history
+-- , n.metadata - ARRAY['imported','fetchlogs_id']::text[] as current
+-- FROM sensor_nodes_history h
+-- JOIN sensor_nodes n USING (sensor_nodes_id)
+-- WHERE created > now() - '2min'::interval;
+
+-- SELECT source_name
+-- , COALESCE(jsonb_array_length(metadata->'attribution'), 0) as attributes
+-- , COUNT(1) as n
+-- FROM sensor_nodes
+-- GROUP BY 1,2
+-- ORDER BY 2 DESC
+-- LIMIT 500;
 
 -------------
 -- File #6 --
@@ -566,7 +625,12 @@ __process_start := clock_timestamp();
 -- count the future measurements
 SELECT COUNT(1) INTO __deleted_future_measurements
 FROM tempfetchdata
-WHERE datetime > now()
+WHERE datetime > __max_measurement_date
+;
+
+	SELECT COUNT(1) INTO __deleted_past_measurements
+FROM tempfetchdata
+WHERE datetime < __min_measurement_date
 ;
 
 
@@ -576,7 +640,8 @@ WITH inserts AS (
   , datetime
   , value
   FROM tempfetchdata
-  WHERE datetime <= now()
+  WHERE datetime > __min_measurement_date
+	AND datetime < __max_measurement_date
   ON CONFLICT DO NOTHING
   RETURNING sensors_id, datetime, value
 ), inserted as (
@@ -880,7 +945,7 @@ INSERT INTO ingest_stats (
 
 
 
-RAISE NOTICE 'inserted-measurements: %, deleted-timescaledb: %, deleted-future-measurements: %, deleted-past-measurements: %, from: %, to: %, inserted-from: %, inserted-to: %, updated-nodes: %, inserted-measurements: %, inserted-measurands: %, inserted-nodes: %, rejected-nodes: %, rejected-systems: %, rejected-sensors: %, exported-sensor-days: %, process-time-ms: %, inserted-spatial-rollups: %, source: fetch'
+RAISE NOTICE 'total-measurements: %, deleted-timescaledb: %, deleted-future-measurements: %, deleted-past-measurements: %, from: %, to: %, inserted-from: %, inserted-to: %, updated-nodes: %, inserted-measurements: %, inserted-measurands: %, inserted-nodes: %, rejected-nodes: %, rejected-systems: %, rejected-sensors: %, exported-sensor-days: %, process-time-ms: %, inserted-spatial-rollups: %, source: fetch'
       , __total_measurements
       , __deleted_timescaledb
       , __deleted_future_measurements

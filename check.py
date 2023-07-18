@@ -50,6 +50,8 @@ parser.add_argument('--errors', action="store_true",
                     help='Show list of errors')
 parser.add_argument('--resubmit', action="store_true",
                     help='Mark the fetchlogs file for resubmittal')
+parser.add_argument('--keep', action="store_true",
+                    help='Do not use TEMP tables for the ingest staging tables')
 args = parser.parse_args()
 
 if 'DOTENV' not in os.environ.keys() and args.env is not None:
@@ -63,6 +65,9 @@ if args.dryrun:
 
 if args.debug:
     os.environ['LOG_LEVEL'] = 'DEBUG'
+
+if args.keep:
+    os.environ['USE_TEMP_TABLES'] = 'False'
 
 from botocore.exceptions import ClientError
 from ingest.handler import cronhandler, logger
@@ -137,6 +142,7 @@ def check_realtime_key(key: str, fix: bool = False):
         mark_success(key=key, reset=True)
 
 
+logger.debug(settings)
 # If we have passed an id than we check that
 if args.id is not None:
     # get the details for that id
