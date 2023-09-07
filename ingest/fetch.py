@@ -2,7 +2,7 @@ import gzip
 import io
 import os
 import logging
-import time
+from time import time
 from datetime import datetime, timedelta
 import orjson
 
@@ -15,6 +15,7 @@ from .utils import (
     StringIteratorIO,
     clean_csv_value,
     get_query,
+    get_data,
     load_fail,
     load_success,
     load_fetchlogs,
@@ -24,7 +25,7 @@ app = typer.Typer()
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('fetch')
 
 FETCH_BUCKET = settings.FETCH_BUCKET
 s3 = boto3.resource("s3")
@@ -95,7 +96,7 @@ def create_staging_table(cursor):
 
 
 def copy_data(cursor, key, fetchlogsId=None):
-    obj = s3.Object(FETCH_BUCKET, key)
+    #obj = s3.Object(FETCH_BUCKET, key)
     # This should not be checked here,
     # if we ask it to copy data it should do that
     # if we want to prevent duplicate attemps we should
@@ -106,12 +107,12 @@ def copy_data(cursor, key, fetchlogsId=None):
     # we are also removing the try/catch
     # if it fails we want to deal with it elsewhere
     logger.debug(f"Copying data for {key}")
-    with gzip.GzipFile(fileobj=obj.get()["Body"]) as gz:
-        f = io.BufferedReader(gz)
+    with get_data(key) as f:
         # make sure that the file is complete
         iterator = StringIteratorIO(
             (f"{fetchlogsId}\t"+parse_json(orjson.loads(line)) for line in f)
         )
+
         query = """
         COPY tempfetchdata (
         fetchlogs_id,
@@ -131,6 +132,7 @@ def copy_data(cursor, key, fetchlogsId=None):
         avpd_value
         ) FROM STDIN;
         """
+        logger.debug("Loading data from STDIN")
         cursor.copy_expert(query, iterator)
 
 
@@ -213,7 +215,7 @@ def load_fetch_file(file: str):
 
 @app.command()
 def load_fetch_day(day: str):
-    start = time.time()
+    start = time()
     conn = boto3.client("s3")
     prefix = f"realtime-gzipped/{day}"
     keys = []
@@ -233,7 +235,7 @@ def load_fetch_day(day: str):
             create_staging_table(cursor)
             for key in keys:
                 copy_data(cursor, key)
-            print(f"All data copied {time.time()-start}")
+            print(f"All data copied {time()-start}")
             filter_data(cursor)
             mindate, maxdate = process_data(cursor)
             update_rollups(cursor, mindate=mindate, maxdate=maxdate)
@@ -302,20 +304,27 @@ def load_db(limit: int = 50, ascending: bool = False):
 
 def load_realtime(rows):
     # create a connection and share for all keys
+    logger.debug(f"Loading {len(rows)} keys")
+    log_time = -1
+    process_time = -1
+    copy_time = 0
     with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
         connection.set_session(autocommit=True)
         with connection.cursor() as cursor:
             # create all the data staging table
             create_staging_table(cursor)
+            logger.debug('Created realtime staging tables')
             # now copy all the data
             keys = []
-
+            start = time()
             for row in rows:
                 key = row[1]
                 fetchlogsId = row[0]
+                logger.debug(f"Loading {key}, id: {fetchlogsId}")
                 try:
                     copy_data(cursor, key, fetchlogsId)
                     keys.append(key)
+                    copy_time += (time() - start)
                 except Exception as e:
                     # all until now is lost
                     # reset things and try to recover
@@ -326,15 +335,20 @@ def load_realtime(rows):
 
             # finally process the data as one
             if len(keys) > 0:
+                logger.debug(f"Processing realtime files")
+                start = time()
                 process_data(cursor)
+                process_time = time() - start
                 # we are outputing some stats
                 for notice in connection.notices:
-                    print(notice)
-                    # mark files as done
-                    load_success(cursor, keys)
+                    logger.info(notice)
+                # mark files as done
+                start = time()
+                load_success(cursor, keys)
+                log_time = time() - start
             # close and commit
             connection.commit()
-
+            return round(copy_time*1000), round(process_time*1000), round(log_time*1000), notice
 
 if __name__ == "__main__":
     app()

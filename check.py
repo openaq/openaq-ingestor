@@ -1,7 +1,10 @@
 import argparse
 import logging
 import os
+import sys
 import orjson
+import psycopg2
+
 
 logger = logging.getLogger(__name__)
 
@@ -16,8 +19,12 @@ parser = argparse.ArgumentParser(
     """)
 parser.add_argument('--id', type=int, required=False,
                     help='The fetchlogs_id value')
+parser.add_argument('--file', type=str, required=False,
+                    help='A local file to load')
 parser.add_argument('--batch', type=str, required=False,
                     help='The batch id value. Loads files based on batch uuid.')
+parser.add_argument('--pattern', type=str, required=False,
+                    help='A reqex to match keys for loading')
 parser.add_argument('--env', type=str, required=False,
                     help='The dot env file to use')
 parser.add_argument('--profile', type=str, required=False,
@@ -82,18 +89,23 @@ from ingest.lcs import (
 
 from ingest.fetch import (
     load_realtime,
+    create_staging_table,
     parse_json,
 )
 
 from ingest.utils import (
+	load_fetchlogs,
     load_errors_list,
     load_errors_summary,
     load_rejects_summary,
+    get_data,
     get_object,
     put_object,
     get_logs_from_ids,
     get_logs_from_pattern,
     mark_success,
+    StringIteratorIO,
+    deconstruct_path,
 )
 
 
@@ -143,6 +155,16 @@ def check_realtime_key(key: str, fix: bool = False):
 
 
 logger.debug(settings)
+
+if args.file is not None:
+    # check if the files exists
+    # is it a realtime file or a lcs file?
+    # upload the file
+    load_realtime([
+        (-1, args.file, None)
+    ])
+    sys.exit()
+
 # If we have passed an id than we check that
 if args.id is not None:
     # get the details for that id
@@ -151,11 +173,12 @@ if args.id is not None:
     keys = [log[1] for log in logs]
     # loop through and check each
     for idx, key in enumerate(keys):
-        print(key)
         if args.download:
-            print(f'downloading: {key}')
-            txt = get_object(key)
-            fpath = os.path.expanduser(f'~/Downloads/{key}')
+            logger.info(f'downloading: {key}')
+			# we may be using the new source pat
+            p = deconstruct_path(key)
+            txt = get_object(**p)
+            fpath = os.path.expanduser(f'~/Downloads/{p["bucket"]}/{p["key"]}')
             os.makedirs(os.path.dirname(fpath), exist_ok=True)
             with open(fpath.replace('.gz', ''), 'w') as f:
                 f.write(txt)
@@ -183,6 +206,30 @@ if args.id is not None:
 elif args.batch is not None:
     # load_measurements_batch(args.batch)
     load_metadata_batch(args.batch)
+
+elif args.pattern is not None:
+	keys = load_fetchlogs(pattern=args.pattern, limit=25, ascending=True)
+    # loop through and check each
+	for row in keys:
+		id = row[0]
+		key = row[1]
+		last = row[2]
+		logger.debug(f"{key}: {id}")
+		if args.load:
+			if 'realtime' in key:
+				load_realtime([
+                    (id, key, last)
+							  ])
+			elif 'stations' in key:
+				load_metadata([
+					{"id": id, "Key": key, "LastModified": last}
+				])
+			else:
+				load_measurements([
+					(id, key, last)
+				])
+
+
 
 # Otherwise if we set the summary flag return a daily summary of errors
 elif args.summary:

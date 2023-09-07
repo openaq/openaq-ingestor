@@ -1,5 +1,6 @@
 import io
 import os
+import sys
 from pathlib import Path
 import logging
 from urllib.parse import unquote_plus
@@ -7,6 +8,7 @@ import gzip
 import uuid
 
 import boto3
+import re
 from io import StringIO
 import psycopg2
 # import typer
@@ -57,6 +59,7 @@ class StringIteratorIO(io.TextIOBase):
                 n -= len(m)
                 line.append(m)
         return "".join(line)
+
 
 
 def put_metric(
@@ -210,12 +213,87 @@ def check_if_done(cursor, key):
     return False
 
 
+def deconstruct_path(key: str):
+	is_local = os.path.isfile(key)
+	is_s3 = bool(re.match(r"s3://[a-zA-Z]+[a-zA-Z0-9_-]+/[a-zA-Z]+", key))
+	is_csv = bool(re.search(r"\.csv(.gz)?$", key))
+	is_json = bool(re.search(r"\.(nd)?json(.gz)?$", key))
+	is_compressed = bool(re.search(r"\.gz$", key))
+	path = {}
+	if is_local:
+		path["local"] = True
+		path["key"] = key
+	elif is_s3:
+		# pull out the bucket name
+		p = key.split("//")[1].split("/")
+		path["bucket"] = p.pop(0)
+		path["key"] = "/".join(p)
+	else:
+		# use the current bucket from settings
+		path["bucket"] = settings.ETL_BUCKET
+		path["key"] = key
+
+	logger.debug(path)
+	return path
+
+def get_data(key: str):
+	# check to see if we were provided with a path that includes the source
+	# e.g.
+	# s3://bucket/key
+	# local://drive/key
+	# /key (assume local)
+	# or no source
+	# key (no forward slash, assume etl bucket)
+	if re.match(r"local://[a-zA-Z]+", key):
+		key = key.replace("local://", "")
+
+	is_local = os.path.isfile(key)
+	is_s3 = bool(re.match(r"s3://[a-zA-Z]+[a-zA-Z0-9_-]+/[a-zA-Z]+", key))
+	#is_csv = bool(re.search(r"\.csv(.gz)?$", key))
+	#is_json = bool(re.search(r"\.(nd)?json(.gz)?$", key))
+	is_compressed = bool(re.search(r"\.gz$", key))
+	logger.debug(f"checking - {key}\ns3: {is_s3}; is_local: {is_local}")
+
+	if is_local:
+		return get_file(key)
+	elif is_s3:
+		# pull out the bucket name
+		path = key.split("//")[1].split("/")
+		bucket = path.pop(0)
+		key = "/".join(path)
+	else:
+		# use the current bucket from settings
+		bucket = settings.ETL_BUCKET
+
+	# stream the file
+	logger.debug(f"streaming s3 file data from s3://{bucket}/{key}")
+	obj = s3.get_object(
+		Bucket=bucket,
+		Key=key,
+		)
+	f = obj["Body"]
+	if is_compressed:
+		return gzip.GzipFile(fileobj=obj["Body"])
+	else:
+		return obj["Body"]
+
+
+def get_file(filepath: str):
+	is_compressed = bool(re.search(r"\.gz$", filepath))
+	logger.debug(f"streaming local file data from {filepath}")
+	if is_compressed:
+		return gzip.open(filepath, 'rb')
+	else:
+		return io.open(filepath, "r", encoding="utf-8")
+
+
 def get_object(
         key: str,
         bucket: str = settings.ETL_BUCKET
 ):
     key = unquote_plus(key)
     text = ''
+    logger.debug(f"Getting {key} from {bucket}")
     obj = s3.get_object(
         Bucket=bucket,
         Key=key,

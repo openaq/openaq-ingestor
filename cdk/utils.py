@@ -26,13 +26,13 @@ def create_dependencies_layer(
     if not environ.get('SKIP_PIP'):
         print(f'Building {layer_id} from {requirements_file} into {output_dir}')
         subprocess.run(
-            f"""python3.8 -m pip install -qq -r {requirements_file} \
+            f"""python -m pip install -qq -r {requirements_file} \
             -t {output_dir}/python && \
             cd {output_dir}/python && \
             find . -type f -name '*.pyc' | \
               while read f; do n=$(echo $f | \
               sed 's/__pycache__\///' | \
-              sed 's/.cpython-[2-3] [0-9]//'); \
+              sed 's/.cpython-[2-3][0-9]//'); \
               cp $f $n; \
               done \
             && find . -type d -a -name '__pycache__' -print0 | xargs -0 rm -rf \
@@ -47,5 +47,5 @@ def create_dependencies_layer(
         self,
         layer_id,
         code=layer_code,
-        compatible_runtimes=[aws_lambda.Runtime.PYTHON_3_8]
+        compatible_runtimes=[aws_lambda.Runtime.PYTHON_3_9]
     )

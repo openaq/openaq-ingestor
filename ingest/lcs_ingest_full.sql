@@ -29,6 +29,10 @@ FROM ms_sensors
 WHERE ms_sensors.ingest_id IS NULL
 OR ingest_sensor_systems_id IS NULL;
 
+UPDATE ms_sensors
+SET units  = 'µg/m³'
+WHERE units IN ('µg/m��','��g/m³', 'ug/m3');
+
 -- first thing we want to do is to get the source
 -- and the source_id from the ingest id
 -- adding the station forces our method to treat the station as the parameter

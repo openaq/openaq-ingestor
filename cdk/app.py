@@ -3,6 +3,7 @@ from aws_cdk import (
     Environment,
     Tags,
 )
+import os
 
 from lambda_ingest_stack import LambdaIngestStack
 
@@ -19,6 +20,10 @@ from settings import settings as lambda_env
 
 app = aws_cdk.App()
 
+env = Environment(
+	account=os.environ['CDK_DEFAULT_ACCOUNT'],
+	region=os.environ['CDK_DEFAULT_REGION']
+	)
 
 ingest = LambdaIngestStack(
     app,
@@ -26,10 +31,12 @@ ingest = LambdaIngestStack(
     env_name=settings.ENV,
     lambda_env=lambda_env,
     fetch_bucket=settings.FETCH_BUCKET,
+	vpc_id=settings.VPC_ID,
     ingest_lambda_timeout=settings.INGEST_LAMBDA_TIMEOUT,
     ingest_lambda_memory_size=settings.INGEST_LAMBDA_MEMORY_SIZE,
     ingest_rate_minutes=settings.INGEST_RATE_MINUTES,
     topic_arn=settings.TOPIC_ARN,
+	env=env,
 )
 
 Tags.of(ingest).add("project", settings.PROJECT)

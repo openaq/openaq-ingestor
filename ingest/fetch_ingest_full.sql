@@ -25,6 +25,7 @@ __deleted_past_measurements int;
 __exported_days int;
 __process_time_ms int;
 __insert_time_ms int;
+__node_time_ms int;
 __cache_time_ms int;
 __ingest_method text := 'realtime';
 __inserted_spatial_rollups int := 0;
@@ -135,7 +136,7 @@ AND st_y(geom) = 0;
 
 UPDATE tempfetchdata_sensors
 SET units  = 'µg/m³'
-WHERE units IN ('µg/m��','��g/m³');
+WHERE units IN ('µg/m��','��g/m³', 'ug/m3');
 
 UPDATE tempfetchdata_sensors
 SET node_metadata =
@@ -617,6 +618,7 @@ WHERE sensors_id IS NULL;
 --WHERE m.datetime = t.datetime
 --AND m.sensors_id = t.sensors_id;
 
+__node_time_ms := 1000 * (extract(epoch FROM clock_timestamp() - __process_start));
 -- restart the clock to measure just inserts
 __process_start := clock_timestamp();
 
@@ -945,7 +947,7 @@ INSERT INTO ingest_stats (
 
 
 
-RAISE NOTICE 'total-measurements: %, deleted-timescaledb: %, deleted-future-measurements: %, deleted-past-measurements: %, from: %, to: %, inserted-from: %, inserted-to: %, updated-nodes: %, inserted-measurements: %, inserted-measurands: %, inserted-nodes: %, rejected-nodes: %, rejected-systems: %, rejected-sensors: %, exported-sensor-days: %, process-time-ms: %, inserted-spatial-rollups: %, source: fetch'
+RAISE NOTICE 'total-measurements: %, deleted-timescaledb: %, deleted-future-measurements: %, deleted-past-measurements: %, from: %, to: %, inserted-from: %, inserted-to: %, updated-nodes: %, inserted-measurements: %, inserted-measurands: %, inserted-nodes: %, rejected-nodes: %, rejected-systems: %, rejected-sensors: %, exported-sensor-days: %, inserted-spatial-rollups: %, process-time-ms: %, insert-time-ms: %, cache-time-ms: %, source: fetch'
       , __total_measurements
       , __deleted_timescaledb
       , __deleted_future_measurements
@@ -963,7 +965,9 @@ RAISE NOTICE 'total-measurements: %, deleted-timescaledb: %, deleted-future-meas
       , __rejected_sensors
       , __exported_days
       , __inserted_spatial_rollups
-      , 1000 * (extract(epoch FROM clock_timestamp() - __process_start));
+		  , __process_time_ms
+			, __insert_time_ms
+	    , __cache_time_ms;
 
 END $$;
 

@@ -1,3 +1,9 @@
+-- DROP TABLE IF EXISTS tempfetchdata
+-- , temp_inserted_measurements
+-- , tempfetchdata_nodes
+-- , tempfetchdata_sensors
+-- , tempfetchdata_sensors_clean;
+
 CREATE {table} IF NOT EXISTS tempfetchdata (
     fetchlogs_id int,
     location text,
