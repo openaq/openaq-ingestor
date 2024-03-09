@@ -17,6 +17,7 @@ from io import StringIO
 from .settings import settings
 from .utils import (
     get_query,
+    get_object,
     clean_csv_value,
     StringIteratorIO,
     fix_units,
@@ -316,6 +317,93 @@ def load_metadata_bucketscan(count=100):
         except KeyError:
             break
 
+def load_versions_db(limit=250, ascending: bool = False):
+    pattern = '/versions/.*\\.json'
+    rows = load_fetchlogs(pattern, limit, ascending)
+    load_versions(rows)
+    return len(rows)
+
+def load_versions(rows):
+    logger.debug(f"Attempting to load {len(rows)} versions")
+    with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
+        with connection.cursor() as cursor:
+            connection.set_session(autocommit=True)
+            n = len(rows)
+            versions = []
+            for row in rows:
+                logger.debug(f"Processing - {row[1]}")
+                raw = get_object(unquote_plus(row[1]))
+                j = orjson.loads(raw)
+                version = {}
+                metadata = {}
+                logger.debug(j)
+                for key, value in j.items():
+                    if key in [
+                        "parent_sensor_id",
+                        "sensor_id",
+                        "parameter",
+                        "version_id",
+                        "life_cycle_id",
+                        "readme"
+                        ]:
+                        version[key] = value
+                    elif key not in ["merged"]:
+                        metadata[key] = value
+
+                version["metadata"] = orjson.dumps(metadata).decode()
+                version["fetchlogs_id"] = row[0]
+                versions.append(version)
+
+                # create a temporary table for matching
+                table="TEMP TABLE" if settings.USE_TEMP_TABLES else 'TABLE'
+                cursor.execute(
+                    f"""
+                    CREATE {table} IF NOT EXISTS ms_versions (
+                    fetchlogs_id int,
+                    sensor_id text, --UNIQUE,
+                    parent_sensor_id text,
+                    life_cycle_id text,
+                    version_id text,
+                    parameter text,
+                    readme text,
+                    sensors_id int,
+                    parent_sensors_id int,
+                    life_cycles_id int,
+                    measurands_id int,
+                    metadata jsonb
+                    );
+                    TRUNCATE ms_versions CASCADE;
+                    """
+                )
+                # add the version data into that table
+                write_csv(
+                    cursor,
+                    versions,
+                    "ms_versions",
+                    [
+                     "fetchlogs_id",
+                     "sensor_id",
+                     "parent_sensor_id",
+                     "version_id",
+                     "life_cycle_id",
+                     "parameter",
+                     "readme",
+                     "metadata",
+                    ],
+                )
+                # return n;
+                # now process that version data as best we can
+                try:
+                    cursor.execute(get_query("lcs_ingest_versions.sql"))
+                except Exception as e:
+                    print(e)
+
+                # now add each of those to the database
+                for notice in connection.notices:
+                    logger.debug(notice)
+
+                return n
+
 
 def load_metadata_db(limit=250, ascending: bool = False):
     order = 'ASC' if ascending else 'DESC'
@@ -330,7 +418,7 @@ def load_metadata_db(limit=250, ascending: bool = False):
                 "LastModified": row[2],
                 "id": row[0],
             }
-        )    
+        )
     if len(contents) > 0:
         load_metadata(contents)
         # data = LCSData(contents)
@@ -381,6 +469,7 @@ def load_metadata(keys):
         ids = ','.join([str(k['id']) for k in keys])
         logger.error(f'load error: {e} ids: {ids}')
         raise
+
 
 
 def select_object(key):

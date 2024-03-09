@@ -1,10 +1,11 @@
--- DROP TABLE IF EXISTS
---   ms_sensornodes
--- , ms_sensorsystems
--- , ms_sensors
--- , meas
--- , keys
--- , temp_inserted_measurements;
+DROP TABLE IF EXISTS
+  ms_sensornodes
+, ms_sensorsystems
+, ms_sensors
+, ms_versions
+, meas
+, keys
+, temp_inserted_measurements;
 
 CREATE {table} IF NOT EXISTS ms_sensornodes (
     sensor_nodes_id int,

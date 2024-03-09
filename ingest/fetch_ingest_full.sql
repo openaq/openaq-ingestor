@@ -674,7 +674,7 @@ WITH inserted AS (
   , MIN(t.datetime) as fi_datetime
   , MAX(t.datetime) as li_datetime
   FROM tempfetchdata m
-  LEFT JOIN temp_inserted_measurements t ON (t.sensors_id = m.sensors_id AND t.datetime = m.datetime)
+  LEFT JOIN temp_inserted_measurements t ON (t.sensors_id = m.sensors_id AND t.datetime = m.datetime AND t.fetchlogs_id = m.fetchlogs_id)
   GROUP BY m.fetchlogs_id)
 UPDATE fetchlogs
 SET completed_datetime = CURRENT_TIMESTAMP

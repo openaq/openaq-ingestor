@@ -114,6 +114,7 @@ def cronhandler(event, context):
     pipeline_limit = settings.PIPELINE_LIMIT if 'pipeline_limit' not in event else event['pipeline_limit']
     realtime_limit = settings.REALTIME_LIMIT if 'realtime_limit' not in event else event['realtime_limit']
     metadata_limit = settings.METADATA_LIMIT if 'metadata_limit' not in event else event['metadata_limit']
+    versions_limit = settings.VERSIONS_LIMIT if 'versions_limit' not in event else event['versions_limit']
 
     logger.info(f"Running cron job: {event['source']}, ascending: {ascending}")
 
@@ -171,5 +172,24 @@ def cronhandler(event, context):
                 )
     except Exception as e:
         logger.error(f"load pipeline failed: {e}")
+
+
+    try:
+        if versions_limit > 0:
+            cnt = 0
+            loaded = 1
+            while (
+                    loaded > 0
+                    and (time() - start_time) < timeout
+            ):
+                loaded = load_versions_db(versions_limit, ascending)
+                cnt += loaded
+                logger.info(
+                    "loaded %s versions records, timer: %0.4f",
+                    cnt, time() - start_time
+                )
+    except Exception as e:
+        logger.error(f"load versions failed: {e}")
+
 
     logger.info("done processing: %0.4f seconds", time() - start_time)

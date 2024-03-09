@@ -82,6 +82,7 @@ from ingest.settings import settings
 
 from ingest.lcs import (
     load_metadata,
+    load_versions,
     load_measurements,
     load_measurements_batch,
     load_metadata_batch,
@@ -182,6 +183,7 @@ if args.id is not None:
             os.makedirs(os.path.dirname(fpath), exist_ok=True)
             with open(fpath.replace('.gz', ''), 'w') as f:
                 f.write(txt)
+
         # if we are resubmiting we dont care
         # what type of file it is
         elif args.resubmit:
@@ -198,6 +200,11 @@ if args.id is not None:
             load_metadata([
                 {"id": args.id, "Key": key, "LastModified": None}
             ])
+        elif 'version' in key:
+            if args.load:
+                load_versions([
+					(args.id, key, None)
+	            ])
         else:
             load_measurements([
                 (args.id, key, None)
