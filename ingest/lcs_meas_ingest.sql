@@ -47,10 +47,26 @@ INTO __total_measurements
 FROM meas;
 
 
-UPDATE meas
-SET sensors_id=s.sensors_id
-FROM sensors s
-WHERE s.source_id=ingest_id;
+-- 	The ranking is to deal with the current possibility
+-- that duplicate sensors with the same ingest/source id are created
+	-- this is a short term fix
+	-- a long term fix would not allow duplicate source_id's
+WITH ranked_sensors AS (
+  SELECT s.sensors_id
+	, s.source_id
+	, RANK() OVER (PARTITION BY s.source_id ORDER BY added_on ASC) as rnk
+	FROM sensors s
+	JOIN meas m ON (s.source_id = m.ingest_id)
+	WHERE s.is_active
+), active_sensors AS (
+	SELECT source_id
+	, sensors_id
+	FROM ranked_sensors
+	WHERE rnk = 1)
+	UPDATE meas
+	SET sensors_id=s.sensors_id
+	FROM active_sensors s
+	WHERE s.source_id=ingest_id;
 
 
 -- first the sensor nodes

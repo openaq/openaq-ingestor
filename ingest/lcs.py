@@ -169,7 +169,7 @@ class LCSData:
             connection.set_session(autocommit=True)
             with connection.cursor() as cursor:
                 start_time = time()
-                self.create_staging_table(cursor)
+                create_staging_table(cursor)
 
                 write_csv(
                     cursor,
@@ -253,11 +253,6 @@ class LCSData:
         query = get_query("lcs_ingest_full.sql")
         cursor.execute(query)
 
-    def create_staging_table(self, cursor):
-        cursor.execute(get_query(
-            "lcs_staging.sql",
-            table="TEMP TABLE" if settings.USE_TEMP_TABLES else 'TABLE'
-        ))
 
     def get_metadata(self):
         hasnew = False
@@ -286,6 +281,14 @@ class LCSData:
             logger.debug(f"get_metadata:hasnew - {self.keys}")
             self.load_data()
 
+
+
+def create_staging_table(cursor):
+	# table and batch are used primarily for testing
+	cursor.execute(get_query(
+		"lcs_staging.sql",
+		table="TEMP TABLE" if settings.USE_TEMP_TABLES else 'TABLE'
+	))
 
 def write_csv(cursor, data, table, columns):
     fields = ",".join(columns)
@@ -330,7 +333,7 @@ def load_metadata_db(limit=250, ascending: bool = False):
                 "LastModified": row[2],
                 "id": row[0],
             }
-        )    
+        )
     if len(contents) > 0:
         load_metadata(contents)
         # data = LCSData(contents)
@@ -562,10 +565,7 @@ def load_measurements(rows):
             connection.set_session(autocommit=True)
             with connection.cursor() as cursor:
 
-                cursor.execute(get_query(
-                    "lcs_staging.sql",
-                    table="TEMP TABLE"
-                ))
+                create_staging_table(cursor)
 
                 write_csv(
                     cursor, new, "keys", ["key",],
