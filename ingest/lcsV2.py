@@ -306,12 +306,16 @@ class IngestClient:
         logger.debug(f"Loading key: {fetchlogs_id}//:{key}")
         is_csv = bool(re.search(r"\.csv(.gz)?$", key))
         is_json = bool(re.search(r"\.(nd)?json(.gz)?$", key))
-
-        #if file_exists(key):
-        content = get_file(key).read()
-        #else:
-        #content = select_object(key)
         self.fetchlogs_id = fetchlogs_id
+
+        # is it a local file? This is used for dev
+        # but likely fine to leave in
+        if os.path.exists(key):
+            content = get_file(key).read()
+        else:
+            content = select_object(key)
+
+        logger.debug(f"Read content containing {len(content)} lines")
 
         if is_csv:
             # all csv data will be measurements
@@ -748,14 +752,17 @@ def load_measurements_batch(batch: str):
             load_measurements(rows)
 
 
-def load_measurements_db(limit=250, ascending: bool = False):
-    #pattern = '^lcs-etl-pipeline/measures/.*\\.(csv|json)'
-    pattern = '^/home/christian/.*\\.(csv|json)'
+def load_measurements_db(
+    limit=250,
+    ascending: bool = False,
+    pattern = '^lcs-etl-pipeline/measures/.*\\.(csv|json)'
+    ):
     rows = load_fetchlogs(pattern, limit, ascending)
     load_measurements(rows)
     return len(rows)
 
 
+# Keep seperate from above so we can test rows not from the database
 def load_measurements(rows):
     logger.debug(f"loading {len(rows)} measurements")
     start_time = time()

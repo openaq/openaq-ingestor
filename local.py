@@ -26,6 +26,11 @@ logging.basicConfig(
     force=True,
 )
 
+logging.getLogger('boto3').setLevel(logging.WARNING)
+logging.getLogger('botocore').setLevel(logging.WARNING)
+logging.getLogger('urllib3').setLevel(logging.WARNING)
+
+
 
 
 rows = [
@@ -36,36 +41,19 @@ rows = [
     ]
 
 
+# local files
+#load_measurements_db(pattern = '^/home/christian/.*\\.(csv|json)')
+# remote files, make sure it can at least read it
+load_measurements_db()
 
-
-#print(rows)
-#load_measurements(rows)
-#load_measurements_db()
-
-#content = select_object(key)
-#content = get_file(file).read()
-
-#print(type(content))
-#print(len(content))
-
-# select object returns a string so we need to convert it
-#data = orjson.loads(content)
-
-#print(type(data))
-#print(len(data))
-
-
-# # load all the data
-# start_time = time()
-
-client = IngestClient()
-
-client.load_keys(rows)
-client.dump()
+## client based methods
+#client = IngestClient()
+#client.load_keys(rows)
+#client.dump()
 
 # #client.load(data)
-# # client.load_metadata(data['meta'])
-# #client.load_locations(data['locations'])
+# client.load_metadata(data['meta'])
+# client.load_locations(data['locations'])
 # client.load_measurements(data['measures'])
 
 # #client.dump()
