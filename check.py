@@ -174,11 +174,12 @@ if args.id is not None:
     # loop through and check each
     for idx, key in enumerate(keys):
         if args.download:
-            logger.info(f'downloading: {key}')
-			# we may be using the new source pat
+            # we may be using the new source pat
             p = deconstruct_path(key)
+            download_path = f'~/Downloads/{p["bucket"]}/{p["key"]}';
+            logger.info(f'downloading to {download_path}')
             txt = get_object(**p)
-            fpath = os.path.expanduser(f'~/Downloads/{p["bucket"]}/{p["key"]}')
+            fpath = os.path.expanduser(download_path)
             os.makedirs(os.path.dirname(fpath), exist_ok=True)
             with open(fpath.replace('.gz', ''), 'w') as f:
                 f.write(txt)
