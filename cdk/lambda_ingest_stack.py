@@ -66,7 +66,7 @@ class LambdaIngestStack(Stack):
             ),
             handler="ingest.handler.handler",
 			vpc=vpc_id,
-            runtime=aws_lambda.Runtime.PYTHON_3_9,
+            runtime=aws_lambda.Runtime.PYTHON_3_11,
             allow_public_subnet=True,
             memory_size=ingest_lambda_memory_size,
             environment=stringify_settings(lambda_env),

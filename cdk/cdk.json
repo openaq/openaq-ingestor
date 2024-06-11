@@ -1,5 +1,5 @@
 {
-  "app": "python app.py",
+  "app": "poetry run python app.py",
   "context": {
     "aws-cdk:enableDiffNoFail": "true",
     "@aws-cdk/core:stackRelativeExports": "true",
