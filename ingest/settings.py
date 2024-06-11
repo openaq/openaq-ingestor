@@ -1,5 +1,12 @@
 from typing import Union
-from pydantic import BaseSettings, validator
+
+from pydantic_settings import (
+    BaseSettings,
+    SettingsConfigDict,
+    )
+
+from pydantic import computed_field
+
 from pathlib import Path
 from os import environ
 
@@ -26,20 +33,17 @@ class Settings(BaseSettings):
     USE_TEMP_TABLES: bool = True
     PAUSE_INGESTING: bool = False
 
-    @validator('DATABASE_READ_URL', allow_reuse=True)
-    def get_read_url(cls, v, values):
-        return v or f"postgresql://{values['DATABASE_READ_USER']}:{values['DATABASE_READ_PASSWORD']}@{values['DATABASE_HOST']}:{values['DATABASE_PORT']}/{values['DATABASE_DB']}"
+    @computed_field
+    def DATABASE_READ_URL(self) -> str:
+        return f"postgresql://{values['DATABASE_READ_USER']}:{values['DATABASE_READ_PASSWORD']}@{values['DATABASE_HOST']}:{values['DATABASE_PORT']}/{values['DATABASE_DB']}"
 
-    @validator('DATABASE_WRITE_URL', allow_reuse=True)
-    def get_write_url(cls, v, values):
-        return v or f"postgresql://{values['DATABASE_WRITE_USER']}:{values['DATABASE_WRITE_PASSWORD']}@{values['DATABASE_HOST']}:{values['DATABASE_PORT']}/{values['DATABASE_DB']}"
+    @computed_field
+    def DATABASE_WRITE_URL(self) -> str:
+        return f"postgresql://{values['DATABASE_WRITE_USER']}:{values['DATABASE_WRITE_PASSWORD']}@{values['DATABASE_HOST']}:{values['DATABASE_PORT']}/{values['DATABASE_DB']}"
 
-    class Config:
-        parent = Path(__file__).resolve().parent.parent
-        if 'DOTENV' in environ:
-            env_file = Path.joinpath(parent, environ['DOTENV'])
-        else:
-            env_file = Path.joinpath(parent, ".env")
+    model_config = SettingsConfigDict(
+        extra="ignore", env_file=f"../{environ.get('DOTENV', '.env')}", env_file_encoding="utf-8"
+    )
 
 
 settings = Settings()

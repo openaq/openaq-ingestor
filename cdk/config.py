@@ -1,5 +1,8 @@
 from typing import List
-from pydantic import BaseSettings
+from pydantic_settings import (
+    BaseSettings,
+    SettingsConfigDict,
+    )
 from pathlib import Path
 from os import environ
 
@@ -8,19 +11,17 @@ class Settings(BaseSettings):
     FETCH_BUCKET: str
     ENV: str = "staging"
     PROJECT: str = "openaq"
-    INGEST_LAMBDA_TIMEOUT: int = 900
-    INGEST_LAMBDA_MEMORY_SIZE: int = 1536
-    INGEST_RATE_MINUTES: int = 15
+    LAMBDA_TIMEOUT: int = 900
+    LAMBDA_MEMORY_SIZE: int = 1536
+    RATE_MINUTES: int = 15
     LOG_LEVEL: str = 'INFO'
     TOPIC_ARN: str = None
     VPC_ID: str = None
 
-    class Config:
-        parent = Path(__file__).resolve().parent.parent
-        if 'DOTENV' in environ:
-            env_file = Path.joinpath(parent, environ['DOTENV'])
-        else:
-            env_file = Path.joinpath(parent, ".env")
+
+    model_config = SettingsConfigDict(
+        extra="ignore", env_file=f"../{environ.get('DOTENV', '.env')}", env_file_encoding="utf-8"
+    )
 
 
 settings = Settings()

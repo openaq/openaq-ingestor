@@ -30,9 +30,9 @@ class LambdaIngestStack(Stack):
         env_name: str,
         lambda_env: Dict,
         fetch_bucket: str,
-        ingest_lambda_timeout: int,
-        ingest_lambda_memory_size: int,
-        ingest_rate_minutes: int = 15,
+        lambda_timeout: int,
+        lambda_memory_size: int,
+        rate_minutes: int = 15,
         topic_arn: str = None,
         vpc_id: str = None,
         **kwargs,
@@ -68,9 +68,9 @@ class LambdaIngestStack(Stack):
 			vpc=vpc_id,
             runtime=aws_lambda.Runtime.PYTHON_3_11,
             allow_public_subnet=True,
-            memory_size=ingest_lambda_memory_size,
+            memory_size=lambda_memory_size,
             environment=stringify_settings(lambda_env),
-            timeout=Duration.seconds(ingest_lambda_timeout),
+            timeout=Duration.seconds(lambda_timeout),
             layers=[
                 create_dependencies_layer(
                     self,
@@ -89,12 +89,12 @@ class LambdaIngestStack(Stack):
 
         # Set how often the ingester will run
         # If 0 the ingester will not run automatically
-        if ingest_rate_minutes > 0:
+        if rate_minutes > 0:
             aws_events.Rule(
                 self,
                 f"{id}-ingest-event-rule",
                 schedule=aws_events.Schedule.cron(
-                    minute=f"0/{ingest_rate_minutes}"
+                    minute=f"0/{rate_minutes}"
                 ),
                 targets=[
                     aws_events_targets.LambdaFunction(ingest_function),
