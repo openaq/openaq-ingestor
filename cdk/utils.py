@@ -23,7 +23,7 @@ def create_dependencies_layer(
     output_dir = f'../.build/{function_name}'
     layer_id = f'openaq-{function_name}-{env_name}-dependencies'
 
-    if not environ.get('SKIP_PIP'):
+    if not environ.get('SKIP_BUILD'):
         print(f'Building {layer_id} from {requirements_file} into {output_dir}')
         subprocess.run(
             f"""python -m pip install -qq -r {requirements_file} \

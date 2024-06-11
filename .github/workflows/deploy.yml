@@ -46,8 +46,9 @@ jobs:
           PROJECT: "openaq"
 
           ## deployment variables
-          CDK_ACCOUNT: ${{ secrets.CDK_ACCOUNT }}
-          CDK_REGION: ${{ secrets.CDK_REGION }}
+          # CDK_ACCOUNT: ${{ secrets.CDK_ACCOUNT }}
+          # CDK_REGION: ${{ secrets.CDK_REGION }}
+
           VPC_ID: ${{ env.AEOLUS_VPC_ID }}
 
           TOPIC_ARN: ${{ env.AEOLUS_FETCH_OBJECT_TOPIC_ARN }}
