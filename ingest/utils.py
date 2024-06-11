@@ -230,7 +230,7 @@ def deconstruct_path(key: str):
 		path["key"] = "/".join(p)
 	else:
 		# use the current bucket from settings
-		path["bucket"] = settings.ETL_BUCKET
+		path["bucket"] = settings.FETCH_BUCKET
 		path["key"] = key
 
 	logger.debug(path)
@@ -263,7 +263,7 @@ def get_data(key: str):
 		key = "/".join(path)
 	else:
 		# use the current bucket from settings
-		bucket = settings.ETL_BUCKET
+		bucket = settings.FETCH_BUCKET
 
 	# stream the file
 	logger.debug(f"streaming s3 file data from s3://{bucket}/{key}")
@@ -289,7 +289,7 @@ def get_file(filepath: str):
 
 def get_object(
         key: str,
-        bucket: str = settings.ETL_BUCKET
+        bucket: str = settings.FETCH_BUCKET
 ):
     key = unquote_plus(key)
     text = ''
@@ -310,7 +310,7 @@ def get_object(
 def put_object(
         data: str,
         key: str,
-        bucket: str = settings.ETL_BUCKET
+        bucket: str = settings.FETCH_BUCKET
 ):
     out = io.BytesIO()
     with gzip.GzipFile(fileobj=out, mode='wb') as gz:
@@ -362,7 +362,7 @@ def select_object(key: str):
     content = ""
     logger.debug(f"Getting object: {key}, {output_serialization}")
     resp = s3.select_object_content(
-        Bucket=settings.ETL_BUCKET,
+        Bucket=settings.FETCH_BUCKET,
         Key=key,
         ExpressionType="SQL",
         Expression="""
@@ -662,7 +662,7 @@ def crawl(bucket, prefix):
 
 
 def crawl_lcs():
-    crawl(settings.ETL_BUCKET, "lcs-etl-pipeline/")
+    crawl(settings.FETCH_BUCKET, "lcs-etl-pipeline/")
 
 
 def crawl_fetch():

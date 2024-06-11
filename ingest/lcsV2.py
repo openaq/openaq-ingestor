@@ -32,7 +32,7 @@ s3c = boto3.client("s3")
 app = typer.Typer()
 dir_path = os.path.dirname(os.path.realpath(__file__))
 
-FETCH_BUCKET = settings.ETL_BUCKET
+FETCH_BUCKET = settings.FETCH_BUCKET
 
 logger = logging.getLogger(__name__)
 

@@ -14,7 +14,6 @@ class Settings(BaseSettings):
     DATABASE_PORT: int
     DATABASE_READ_URL: Union[str, None]
     DATABASE_WRITE_URL: Union[str, None]
-    FASTAPI_URL: str
     DRYRUN: bool = False
     FETCH_BUCKET: str
     ETL_BUCKET: str
