@@ -19,8 +19,6 @@ class Settings(BaseSettings):
     DATABASE_DB: str
     DATABASE_HOST: str
     DATABASE_PORT: int
-    DATABASE_READ_URL: Union[str, None]
-    DATABASE_WRITE_URL: Union[str, None]
     DRYRUN: bool = False
     FETCH_BUCKET: str
     ETL_BUCKET: str
@@ -35,14 +33,14 @@ class Settings(BaseSettings):
 
     @computed_field
     def DATABASE_READ_URL(self) -> str:
-        return f"postgresql://{values['DATABASE_READ_USER']}:{values['DATABASE_READ_PASSWORD']}@{values['DATABASE_HOST']}:{values['DATABASE_PORT']}/{values['DATABASE_DB']}"
+        return f"postgresql://{self.DATABASE_READ_USER}:{self.DATABASE_READ_PASSWORD}@{self.DATABASE_HOST}:{self.DATABASE_PORT}/{self.DATABASE_DB}"
 
     @computed_field
     def DATABASE_WRITE_URL(self) -> str:
-        return f"postgresql://{values['DATABASE_WRITE_USER']}:{values['DATABASE_WRITE_PASSWORD']}@{values['DATABASE_HOST']}:{values['DATABASE_PORT']}/{values['DATABASE_DB']}"
+        return f"postgresql://{self.DATABASE_WRITE_USER}:{self.DATABASE_WRITE_PASSWORD}@{self.DATABASE_HOST}:{self.DATABASE_PORT}/{self.DATABASE_DB}"
 
     model_config = SettingsConfigDict(
-        extra="ignore", env_file=f"../{environ.get('DOTENV', '.env')}", env_file_encoding="utf-8"
+        extra="ignore", env_file=f"{environ.get('DOTENV', '.env')}", env_file_encoding="utf-8"
     )
 
 
