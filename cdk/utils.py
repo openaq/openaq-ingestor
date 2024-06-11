@@ -49,5 +49,5 @@ def create_dependencies_layer(
         self,
         layer_id,
         code=layer_code,
-        compatible_runtimes=[aws_lambda.Runtime.PYTHON_3_11]
+        compatible_runtimes=[aws_lambda.Runtime.PYTHON_3_12]
     )
