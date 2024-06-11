@@ -71,4 +71,5 @@ jobs:
         working-directory: ./cdk
         run: |
           poetry install
+          poetry self add poetry-plugin-export
           cdk deploy openaq-ingest-aeolus --require-approval never
