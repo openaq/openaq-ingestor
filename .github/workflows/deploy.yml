@@ -66,6 +66,7 @@ jobs:
           DATABASE_PORT: ${{ env.AEOLUS_DATABASE_PORT }}
           FETCH_BUCKET: ${{ env.AEOLUS_FETCH_BUCKET }}
           ETL_BUCKET: ${{ env.AEOLUS_FETCH_BUCKET }}
+          PAUSE_INGESTING: True
 
 
         working-directory: ./cdk
