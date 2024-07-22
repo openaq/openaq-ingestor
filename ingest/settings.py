@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     METADATA_LIMIT: int = 10
     REALTIME_LIMIT: int = 10
     LOG_LEVEL: str = 'INFO'
+    USE_TEMP_TABLES: bool = True
+    PAUSE_INGESTING: bool = False
 
     @validator('DATABASE_READ_URL', allow_reuse=True)
     def get_read_url(cls, v, values):

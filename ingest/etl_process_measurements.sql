@@ -21,20 +21,21 @@ __error_context text;
 __ingest_method text := 'lcs';
 BEGIN
 
+
 DELETE
-FROM meas
+FROM staging_measurements
 WHERE ingest_id IS NULL
 OR datetime is NULL
 OR value IS NULL;
 
 --DELETE
---FROM meas
+--FROM staging_measurements
 --WHERE datetime < '2018-01-01'::timestamptz
 --OR datetime>now();
 
 DELETE
 FROM rejects
-WHERE fetchlogs_id IN (SELECT fetchlogs_id FROM meas)
+WHERE fetchlogs_id IN (SELECT fetchlogs_id FROM staging_measurements)
 AND tbl ~* '^meas';
 
 
@@ -44,7 +45,7 @@ SELECT COUNT(1)
 INTO __total_measurements
 , __start_datetime
 , __end_datetime
-FROM meas;
+FROM staging_measurements;
 
 
 -- 	The ranking is to deal with the current possibility
@@ -56,31 +57,32 @@ WITH ranked_sensors AS (
 	, s.source_id
 	, RANK() OVER (PARTITION BY s.source_id ORDER BY added_on ASC) as rnk
 	FROM sensors s
-	JOIN meas m ON (s.source_id = m.ingest_id)
-	WHERE s.is_active
+	JOIN staging_measurements m ON (s.source_id = m.ingest_id)
 ), active_sensors AS (
 	SELECT source_id
 	, sensors_id
 	FROM ranked_sensors
 	WHERE rnk = 1)
-	UPDATE meas
+	UPDATE staging_measurements
 	SET sensors_id=s.sensors_id
 	FROM active_sensors s
 	WHERE s.source_id=ingest_id;
 
-
--- first the sensor nodes
+-- Now we have to fill in any missing information
+-- first add the nodes and systems that dont exist
+-- add just the bare minimum amount of data to the system
+-- we assume that the node information will be added later
 WITH nodes AS (
 INSERT INTO sensor_nodes (
   source_name
 , site_name
 , source_id
 , metadata)
-SELECT split_ingest_id(ingest_id, 1) as source_name
-, split_ingest_id(ingest_id, 2) as site_name
-, split_ingest_id(ingest_id, 2) as source_id
+SELECT source_name
+, source_name
+, source_id
 , jsonb_build_object('fetchlogs_id', MIN(fetchlogs_id))
-FROM meas
+FROM staging_measurements
 WHERE sensors_id IS NULL
 GROUP BY 1,2,3
 ON CONFLICT (source_name, source_id) DO UPDATE
@@ -99,10 +101,10 @@ ON CONFLICT DO NOTHING;
 -- this method depends on us having a match for the parameter
 WITH sen AS (
   SELECT ingest_id
-  , split_ingest_id(ingest_id, 1) as source_name
-  , split_ingest_id(ingest_id, 2) as source_id
-  , split_ingest_id(ingest_id, 3) as parameter
-  FROM meas
+  , source_name
+  , source_id
+  , measurand as parameter
+  FROM staging_measurements
   WHERE sensors_id IS NULL
   GROUP BY 1,2,3,4
 ), inserts AS (
@@ -120,16 +122,16 @@ SELECT COUNT(DISTINCT sensor_systems_id) INTO __inserted_nodes
 FROM inserts;
 
 -- try again to find the sensors
-UPDATE meas
+UPDATE staging_measurements
 SET sensors_id=s.sensors_id
 FROM sensors s
 WHERE s.source_id=ingest_id
-AND meas.sensors_id IS NULL;
+AND staging_measurements.sensors_id IS NULL;
 
 
 SELECT COUNT(DISTINCT sensors_id)
 INTO __total_nodes
-FROM meas;
+FROM staging_measurements;
 
 
 __process_time_ms := 1000 * (extract(epoch FROM clock_timestamp() - __process_start));
@@ -141,9 +143,9 @@ INSERT INTO rejects (t,tbl,r,fetchlogs_id)
 SELECT
     current_timestamp
     , 'meas-missing-sensors-id'
-    , to_jsonb(meas)
+    , to_jsonb(staging_measurements)
     , fetchlogs_id
-FROM meas
+FROM staging_measurements
 WHERE sensors_id IS NULL
 RETURNING 1)
 SELECT COUNT(1) INTO __rejected_measurements
@@ -166,12 +168,12 @@ INSERT INTO measurements (
     value,
     lon,
     lat
-FROM meas
+FROM staging_measurements
 WHERE sensors_id IS NOT NULL
 ON CONFLICT DO NOTHING
 RETURNING sensors_id, datetime, value, lat, lon
 ), inserted as (
-   INSERT INTO temp_inserted_measurements (sensors_id, datetime, value, lat, lon)
+   INSERT INTO staging_inserted_measurements (sensors_id, datetime, value, lat, lon)
    SELECT sensors_id
    , datetime
    , value
@@ -199,8 +201,8 @@ WITH inserted AS (
   , MAX(m.datetime) as lr_datetime
   , MIN(t.datetime) as fi_datetime
   , MAX(t.datetime) as li_datetime
-  FROM meas m
-  LEFT JOIN temp_inserted_measurements t ON (t.sensors_id = m.sensors_id AND t.datetime = m.datetime)
+  FROM staging_measurements m
+  LEFT JOIN staging_inserted_measurements t ON (t.sensors_id = m.sensors_id AND t.datetime = m.datetime)
   GROUP BY m.fetchlogs_id)
 UPDATE fetchlogs
 SET completed_datetime = CURRENT_TIMESTAMP
@@ -216,7 +218,7 @@ WHERE inserted.fetchlogs_id = fetchlogs.fetchlogs_id;
 -- track the time required to update cache tables
 __process_start := clock_timestamp();
 
--- -- Now we can use those temp_inserted_measurements to update the cache tables
+-- -- Now we can use those staging_inserted_measurements to update the cache tables
 -- INSERT INTO sensors_latest (
 --   sensors_id
 --   , datetime
@@ -232,7 +234,7 @@ __process_start := clock_timestamp();
 --    , lat
 --    , lon
 --    , row_number() OVER (PARTITION BY sensors_id ORDER BY datetime DESC) as rn
---   FROM temp_inserted_measurements
+--   FROM staging_inserted_measurements
 -- ), latest AS (
 -- ---- only insert those rows
 --   SELECT sensors_id
@@ -266,7 +268,7 @@ INSERT INTO sensor_exceedances (sensors_id, threshold_value, datetime_latest)
   m.sensors_id
   , t.value
   , MAX(datetime)
-  FROM temp_inserted_measurements m
+  FROM staging_inserted_measurements m
   JOIN sensors s ON (m.sensors_id = s.sensors_id)
   JOIN thresholds t ON (s.measurands_id = t.measurands_id)
   AND m.value > t.value
@@ -298,7 +300,7 @@ WITH numbered AS (
    , min(datetime) OVER (PARTITION BY sensors_id) as datetime_min
    , avg(value) OVER (PARTITION BY sensors_id) as value_avg
    , row_number() OVER (PARTITION BY sensors_id ORDER BY datetime DESC) as rn
-  FROM temp_inserted_measurements
+  FROM staging_inserted_measurements
 ), latest AS (
 ---- only insert those rows
   SELECT sensors_id
@@ -348,7 +350,7 @@ SET datetime_last = GREATEST(sensors_rollup.datetime_last, EXCLUDED.datetime_las
 -- Update the table that will help to track hourly rollups
 INSERT INTO hourly_stats (datetime)
   SELECT date_trunc('hour', datetime)
-  FROM temp_inserted_measurements
+  FROM staging_inserted_measurements
   GROUP BY 1
 ON CONFLICT (datetime) DO UPDATE
 SET modified_on = now();
@@ -364,7 +366,7 @@ SELECT sn.sensor_nodes_id
 , COUNT(1)
 , COUNT(DISTINCT p.measurands_id)
 , MAX(now())
-FROM temp_inserted_measurements m -- meas m
+FROM staging_inserted_measurements m -- meas m
 JOIN sensors s ON (m.sensors_id = s.sensors_id)
 JOIN measurands p ON (s.measurands_id = p.measurands_id)
 JOIN sensor_systems ss ON (s.sensor_systems_id = ss.sensor_systems_id)

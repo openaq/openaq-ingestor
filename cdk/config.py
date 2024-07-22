@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     INGEST_RATE_MINUTES: int = 15
     LOG_LEVEL: str = 'INFO'
     TOPIC_ARN: str = None
+    VPC_ID: str = None
 
     class Config:
         parent = Path(__file__).resolve().parent.parent

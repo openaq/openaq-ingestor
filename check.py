@@ -1,7 +1,10 @@
 import argparse
 import logging
 import os
-import json
+import sys
+import orjson
+import psycopg2
+
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +19,12 @@ parser = argparse.ArgumentParser(
     """)
 parser.add_argument('--id', type=int, required=False,
                     help='The fetchlogs_id value')
+parser.add_argument('--file', type=str, required=False,
+                    help='A local file to load')
+parser.add_argument('--batch', type=str, required=False,
+                    help='The batch id value. Loads files based on batch uuid.')
+parser.add_argument('--pattern', type=str, required=False,
+                    help='A reqex to match keys for loading')
 parser.add_argument('--env', type=str, required=False,
                     help='The dot env file to use')
 parser.add_argument('--profile', type=str, required=False,
@@ -24,11 +33,11 @@ parser.add_argument('--n', type=int, required=False, default=30,
                     help="""Either the number of entries to list
                     (sorted by date) or the number of days to go
                     back if using the summary or rejects arguments""")
-parser.add_argument('--pipeline', type=int, required=False, default=1,
+parser.add_argument('--pipeline', type=int, required=False, default=0,
                     help="""The number of pipeline files to load at a time""")
-parser.add_argument('--metadata', type=int, required=False, default=1,
+parser.add_argument('--metadata', type=int, required=False, default=0,
                     help="""The number of metadata files to load at a time""")
-parser.add_argument('--realtime', type=int, required=False, default=1,
+parser.add_argument('--realtime', type=int, required=False, default=0,
                     help="""The number of realtime files to load at a time""")
 parser.add_argument('--fix', action="store_true",
                     help='Automatically attempt to fix the problem')
@@ -48,6 +57,8 @@ parser.add_argument('--errors', action="store_true",
                     help='Show list of errors')
 parser.add_argument('--resubmit', action="store_true",
                     help='Mark the fetchlogs file for resubmittal')
+parser.add_argument('--keep', action="store_true",
+                    help='Do not use TEMP tables for the ingest staging tables')
 args = parser.parse_args()
 
 if 'DOTENV' not in os.environ.keys() and args.env is not None:
@@ -62,32 +73,39 @@ if args.dryrun:
 if args.debug:
     os.environ['LOG_LEVEL'] = 'DEBUG'
 
+if args.keep:
+    os.environ['USE_TEMP_TABLES'] = 'False'
+
 from botocore.exceptions import ClientError
 from ingest.handler import cronhandler, logger
 from ingest.settings import settings
 
 from ingest.lcs import (
-    load_metadata_db,
-    load_measurements_db,
-    load_measurements_file,
+    load_metadata,
     load_measurements,
-    get_measurements,
+    load_measurements_batch,
+    load_metadata_batch,
 )
 
 from ingest.fetch import (
     load_realtime,
+    create_staging_table,
     parse_json,
 )
 
 from ingest.utils import (
+	load_fetchlogs,
     load_errors_list,
     load_errors_summary,
     load_rejects_summary,
+    get_data,
     get_object,
     put_object,
     get_logs_from_ids,
     get_logs_from_pattern,
     mark_success,
+    StringIteratorIO,
+    deconstruct_path,
 )
 
 
@@ -107,18 +125,19 @@ def check_realtime_key(key: str, fix: bool = False):
     n = len(lines)
     errors = []
     for jdx, line in enumerate(lines):
-        try:
-            # first just try and load it
-            obj = json.loads(line)
-        except Exception as e:
-            errors.append(jdx)
-            print(f"*** Loading error on line #{jdx} (of {n}): {e}\n{line}")
-        try:
-            # then we can try to parse it
-            parse_json(obj)
-        except Exception as e:
-            errors.append(jdx)
-            print(f"*** Parsing error on line #{jdx} (of {n}): {e}\n{line}")
+        if len(line) > 0:
+            try:
+                # first just try and load it
+                obj = orjson.loads(line)
+            except Exception as e:
+                errors.append(jdx)
+                print(f"*** Loading error on line #{jdx} (of {n}): {e}\n{line}")
+            try:
+                # then we can try to parse it
+                parse_json(obj)
+            except Exception as e:
+                errors.append(jdx)
+                print(f"*** Parsing error on line #{jdx} (of {n}): {e}\n{line}")
 
     if len(errors) > 0 and fix:
         # remove the bad rows and then replace the file
@@ -135,6 +154,17 @@ def check_realtime_key(key: str, fix: bool = False):
         mark_success(key=key, reset=True)
 
 
+logger.debug(settings)
+
+if args.file is not None:
+    # check if the files exists
+    # is it a realtime file or a lcs file?
+    # upload the file
+    load_realtime([
+        (-1, args.file, None)
+    ])
+    sys.exit()
+
 # If we have passed an id than we check that
 if args.id is not None:
     # get the details for that id
@@ -143,26 +173,63 @@ if args.id is not None:
     keys = [log[1] for log in logs]
     # loop through and check each
     for idx, key in enumerate(keys):
+        if args.download:
+            # we may be using the new source pat
+            p = deconstruct_path(key)
+            download_path = f'~/Downloads/{p["bucket"]}/{p["key"]}';
+            logger.info(f'downloading to {download_path}')
+            txt = get_object(**p)
+            fpath = os.path.expanduser(download_path)
+            os.makedirs(os.path.dirname(fpath), exist_ok=True)
+            with open(fpath.replace('.gz', ''), 'w') as f:
+                f.write(txt)
         # if we are resubmiting we dont care
         # what type of file it is
-        if args.resubmit:
+        elif args.resubmit:
             mark_success(key, reset=True, message='resubmitting')
         # figure out what type of file it is
         elif 'realtime' in key:
             if args.load:
-                load_realtime([key])
+                load_realtime([
+                    (args.id, key, None)
+                ])
             else:
                 check_realtime_key(key, args.fix)
+        elif 'stations' in key:
+            load_metadata([
+                {"id": args.id, "Key": key, "LastModified": None}
+            ])
         else:
-            print(key)
+            load_measurements([
+                (args.id, key, None)
+            ])
 
-        if args.download:
-            print(f'downloading: {key}')
-            txt = get_object(key)
-            fpath = os.path.expanduser(f'~/{key}')
-            os.makedirs(os.path.dirname(fpath), exist_ok=True)
-            with open(fpath.replace('.gz',''), 'w') as f:
-                f.write(txt)
+elif args.batch is not None:
+    # load_measurements_batch(args.batch)
+    load_metadata_batch(args.batch)
+
+elif args.pattern is not None:
+	keys = load_fetchlogs(pattern=args.pattern, limit=25, ascending=True)
+    # loop through and check each
+	for row in keys:
+		id = row[0]
+		key = row[1]
+		last = row[2]
+		logger.debug(f"{key}: {id}")
+		if args.load:
+			if 'realtime' in key:
+				load_realtime([
+                    (id, key, last)
+							  ])
+			elif 'stations' in key:
+				load_metadata([
+					{"id": id, "Key": key, "LastModified": last}
+				])
+			else:
+				load_measurements([
+					(id, key, last)
+				])
+
 
 
 # Otherwise if we set the summary flag return a daily summary of errors

@@ -1,11 +1,14 @@
 import io
 import os
+import sys
 from pathlib import Path
 import logging
 from urllib.parse import unquote_plus
 import gzip
+import uuid
 
 import boto3
+import re
 from io import StringIO
 import psycopg2
 # import typer
@@ -58,6 +61,7 @@ class StringIteratorIO(io.TextIOBase):
         return "".join(line)
 
 
+
 def put_metric(
         namespace,
         metricname,
@@ -107,7 +111,7 @@ def clean_csv_value(value):
 
 
 def get_query(file, **params):
-    logger.debug("get_query: {file}, params: {params}")
+    logger.debug(f"get_query: {file}, params: {params}")
     query = Path(os.path.join(dir_path, file)).read_text()
     if params is not None and len(params) >= 1:
         query = query.format(**params)
@@ -209,12 +213,87 @@ def check_if_done(cursor, key):
     return False
 
 
+def deconstruct_path(key: str):
+	is_local = os.path.isfile(key)
+	is_s3 = bool(re.match(r"s3://[a-zA-Z]+[a-zA-Z0-9_-]+/[a-zA-Z]+", key))
+	is_csv = bool(re.search(r"\.csv(.gz)?$", key))
+	is_json = bool(re.search(r"\.(nd)?json(.gz)?$", key))
+	is_compressed = bool(re.search(r"\.gz$", key))
+	path = {}
+	if is_local:
+		path["local"] = True
+		path["key"] = key
+	elif is_s3:
+		# pull out the bucket name
+		p = key.split("//")[1].split("/")
+		path["bucket"] = p.pop(0)
+		path["key"] = "/".join(p)
+	else:
+		# use the current bucket from settings
+		path["bucket"] = settings.ETL_BUCKET
+		path["key"] = key
+
+	logger.debug(path)
+	return path
+
+def get_data(key: str):
+	# check to see if we were provided with a path that includes the source
+	# e.g.
+	# s3://bucket/key
+	# local://drive/key
+	# /key (assume local)
+	# or no source
+	# key (no forward slash, assume etl bucket)
+	if re.match(r"local://[a-zA-Z]+", key):
+		key = key.replace("local://", "")
+
+	is_local = os.path.isfile(key)
+	is_s3 = bool(re.match(r"s3://[a-zA-Z]+[a-zA-Z0-9_-]+/[a-zA-Z]+", key))
+	#is_csv = bool(re.search(r"\.csv(.gz)?$", key))
+	#is_json = bool(re.search(r"\.(nd)?json(.gz)?$", key))
+	is_compressed = bool(re.search(r"\.gz$", key))
+	logger.debug(f"checking - {key}\ns3: {is_s3}; is_local: {is_local}")
+
+	if is_local:
+		return get_file(key)
+	elif is_s3:
+		# pull out the bucket name
+		path = key.split("//")[1].split("/")
+		bucket = path.pop(0)
+		key = "/".join(path)
+	else:
+		# use the current bucket from settings
+		bucket = settings.ETL_BUCKET
+
+	# stream the file
+	logger.debug(f"streaming s3 file data from s3://{bucket}/{key}")
+	obj = s3.get_object(
+		Bucket=bucket,
+		Key=key,
+		)
+	f = obj["Body"]
+	if is_compressed:
+		return gzip.GzipFile(fileobj=obj["Body"])
+	else:
+		return obj["Body"]
+
+
+def get_file(filepath: str):
+	is_compressed = bool(re.search(r"\.gz$", filepath))
+	logger.debug(f"streaming local file data from {filepath}")
+	if is_compressed:
+		return gzip.open(filepath, 'rb')
+	else:
+		return io.open(filepath, "r", encoding="utf-8")
+
+
 def get_object(
         key: str,
         bucket: str = settings.ETL_BUCKET
 ):
     key = unquote_plus(key)
     text = ''
+    logger.debug(f"Getting {key} from {bucket}")
     obj = s3.get_object(
         Bucket=bucket,
         Key=key,
@@ -226,6 +305,7 @@ def get_object(
         text = body
 
     return text
+
 
 def put_object(
         data: str,
@@ -392,38 +472,21 @@ def load_errors_list(limit: int = 10):
             return rows
 
 
-def load_fail(cursor, key, e):
-    print("full copy failed", key, e)
+def load_fail(cursor, fetchlogsId, e):
+    logger.warning(f"full copy of {fetchlogsId} failed: {e}")
     cursor.execute(
         """
         UPDATE fetchlogs
-        SET
-        last_message=%s
-        WHERE
-        key=%s
+        SET last_message=%s
+        , has_error = true
+        , completed_datetime = clock_timestamp()
+        WHERE fetchlogs_id=%s
         """,
         (
             str(e),
-            key,
+            fetchlogsId,
         ),
     )
-
-
-# def load_success(cursor, key):
-#     cursor.execute(
-#         """
-#         UPDATE fetchlogs
-#         SET
-#         last_message=%s,
-#         loaded_datetime=clock_timestamp()
-#         WHERE
-#         key=%s
-#         """,
-#         (
-#             str(cursor.statusmessage),
-#             key,
-#         ),
-#     )
 
 
 def load_success(cursor, keys, message: str = 'success'):
@@ -433,6 +496,7 @@ def load_success(cursor, keys, message: str = 'success'):
         SET
         last_message=%s
         , completed_datetime=clock_timestamp()
+        , has_error = false
         WHERE key=ANY(%s)
         """,
         (
@@ -440,6 +504,50 @@ def load_success(cursor, keys, message: str = 'success'):
             keys,
         ),
     )
+
+
+def load_fetchlogs(
+        pattern: str,
+        limit: int = 250,
+        ascending: bool = False,
+):
+    order = 'ASC' if ascending else 'DESC'
+    conn = psycopg2.connect(settings.DATABASE_WRITE_URL)
+    cur = conn.cursor()
+    batch_uuid = uuid.uuid4().hex
+    cur.execute(
+        f"""
+        UPDATE fetchlogs
+        SET loaded_datetime = CURRENT_TIMESTAMP
+        , jobs = jobs + 1
+        , batch_uuid = %s
+        FROM (
+          SELECT fetchlogs_id
+          FROM fetchlogs
+          WHERE key~E'{pattern}'
+          AND NOT has_error
+          AND completed_datetime is null
+          AND (
+             loaded_datetime IS NULL
+             OR loaded_datetime < now() - '30min'::interval
+          )
+          ORDER BY last_modified {order} nulls last
+          LIMIT %s
+          FOR UPDATE SKIP LOCKED
+        ) as q
+        WHERE q.fetchlogs_id = fetchlogs.fetchlogs_id
+        RETURNING fetchlogs.fetchlogs_id
+        , fetchlogs.key
+        , fetchlogs.last_modified;
+        """,
+        (batch_uuid, limit,),
+    )
+    rows = cur.fetchall()
+    logger.debug(f'Loaded {len(rows)} from fetchlogs using {pattern}/{order}')
+    conn.commit()
+    cur.close()
+    conn.close()
+    return rows
 
 
 def add_fetchlog(key: str):
@@ -500,6 +608,7 @@ def mark_success(
                 SET
                 last_message=%s
                 , completed_datetime={completed}
+                , has_error = false
                 WHERE {where}
                 """,
                 (

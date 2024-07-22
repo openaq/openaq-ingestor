@@ -2,8 +2,10 @@ from pathlib import Path
 from typing import Dict
 
 from aws_cdk import (
+	Environment,
     aws_lambda,
     aws_s3,
+	aws_ec2,
     Stack,
     Duration,
     aws_events,
@@ -24,6 +26,7 @@ class LambdaIngestStack(Stack):
         self,
         scope: Construct,
         id: str,
+        env: Environment,
         env_name: str,
         lambda_env: Dict,
         fetch_bucket: str,
@@ -31,11 +34,15 @@ class LambdaIngestStack(Stack):
         ingest_lambda_memory_size: int,
         ingest_rate_minutes: int = 15,
         topic_arn: str = None,
+        vpc_id: str = None,
         **kwargs,
     ) -> None:
         """Lambda plus cronjob to ingest metadata,
         realtime and pipeline data"""
-        super().__init__(scope, id, *kwargs)
+        super().__init__(scope, id, env=env,*kwargs)
+
+        if vpc_id is not None:
+            vpc_id = aws_ec2.Vpc.from_lookup(self, f"{id}-vpc", vpc_id=vpc_id)
 
         ingest_function = aws_lambda.Function(
             self,
@@ -58,7 +65,8 @@ class LambdaIngestStack(Stack):
                 ],
             ),
             handler="ingest.handler.handler",
-            runtime=aws_lambda.Runtime.PYTHON_3_8,
+			vpc=vpc_id,
+            runtime=aws_lambda.Runtime.PYTHON_3_9,
             allow_public_subnet=True,
             memory_size=ingest_lambda_memory_size,
             environment=stringify_settings(lambda_env),
