@@ -3,7 +3,7 @@ name: Deploy ingestor
 on:
   push:
     branches:
-      - version/aeolus
+      - staging/aeolus
 
 jobs:
   deploy:
@@ -23,7 +23,7 @@ jobs:
         uses: aws-actions/aws-secretsmanager-get-secrets@v2
         with:
           secret-ids: |
-            AEOLUS, openaq-env/aeolus
+            STAGING, openaq-env/staging
           name-transformation: uppercase
           parse-json-secrets: true
 
@@ -45,27 +45,27 @@ jobs:
 
       - name: Deploy stack
         env:
-          ENV: "aeolus"
+          ENV: "staging"
           PROJECT: "openaq"
 
           ## deployment variables
           # CDK_ACCOUNT: ${{ secrets.CDK_ACCOUNT }}
           # CDK_REGION: ${{ secrets.CDK_REGION }}
 
-          VPC_ID: ${{ env.AEOLUS_VPC_ID }}
+          VPC_ID: ${{ env.STAGING_VPC_ID }}
 
-          TOPIC_ARN: ${{ env.AEOLUS_FETCH_OBJECT_TOPIC_ARN }}
+          TOPIC_ARN: ${{ env.STAGING_FETCH_OBJECT_TOPIC_ARN }}
 
           ## application variables
-          DATABASE_READ_USER: ${{ env.AEOLUS_DATABASE_READ_USER }}
-          DATABASE_READ_PASSWORD: ${{ env.AEOLUS_DATABASE_READ_PASSWORD }}
-          DATABASE_WRITE_USER: ${{ env.AEOLUS_DATABASE_WRITE_USER }}
-          DATABASE_WRITE_PASSWORD: ${{ env.AEOLUS_DATABASE_WRITE_PASSWORD }}
-          DATABASE_DB: ${{ env.AEOLUS_DATABASE_DB }}
-          DATABASE_HOST: ${{ env.AEOLUS_DATABASE_HOST }}
-          DATABASE_PORT: ${{ env.AEOLUS_DATABASE_PORT }}
-          FETCH_BUCKET: ${{ env.AEOLUS_FETCH_BUCKET }}
-          ETL_BUCKET: ${{ env.AEOLUS_FETCH_BUCKET }}
+          DATABASE_READ_USER: ${{ env.STAGING_DATABASE_READ_USER }}
+          DATABASE_READ_PASSWORD: ${{ env.STAGING_DATABASE_READ_PASSWORD }}
+          DATABASE_WRITE_USER: ${{ env.STAGING_DATABASE_WRITE_USER }}
+          DATABASE_WRITE_PASSWORD: ${{ env.STAGING_DATABASE_WRITE_PASSWORD }}
+          DATABASE_DB: ${{ env.STAGING_DATABASE_DB }}
+          DATABASE_HOST: ${{ env.STAGING_DATABASE_HOST }}
+          DATABASE_PORT: ${{ env.STAGING_DATABASE_PORT }}
+          FETCH_BUCKET: ${{ env.STAGING_FETCH_BUCKET }}
+          ETL_BUCKET: ${{ env.STAGING_FETCH_BUCKET }}
           PAUSE_INGESTING: True
 
 
@@ -73,4 +73,4 @@ jobs:
         run: |
           poetry self add poetry-plugin-export
           poetry install
-          cdk deploy openaq-ingest-aeolus --require-approval never
+          cdk deploy openaq-ingest-staging --require-approval never
