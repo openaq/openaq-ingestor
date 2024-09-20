@@ -160,7 +160,8 @@ FROM r;
 -- this is to deal with fetchers that do not add these data
 INSERT INTO staging_sensorsystems (sensor_nodes_id, ingest_id, fetchlogs_id, metadata)
 SELECT sensor_nodes_id
-, source_id -- the ingest_id has the source_name in it and we dont need/want that
+--, source_id -- the ingest_id has the source_name in it and we dont need/want that
+, ingest_id
 , fetchlogs_id
 , '{"note":"automatically added for sensor node"}'
 FROM staging_sensornodes
@@ -266,10 +267,11 @@ AND sensors.source_id = staging_sensors.ingest_id;
 
 
 UPDATE staging_sensors
-SET measurands_id = measurands.measurands_id
-from measurands
-WHERE staging_sensors.measurand=measurands.measurand
-and staging_sensors.units=measurands.units;
+SET measurands_id = m.measurands_id
+FROM (SELECT measurand, MIN(measurands_id) AS measurands_id FROM measurands GROUP BY measurand) as m
+WHERE staging_sensors.measurand=m.measurand
+--AND staging_sensors.units=measurands.units
+;
 
 
 WITH r AS (
