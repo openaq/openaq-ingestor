@@ -292,10 +292,14 @@ INSERT INTO sensors (
   source_id
 , sensor_systems_id
 , measurands_id
+, data_logging_period_seconds
+, data_averaging_period_seconds
 , metadata)
 SELECT ingest_id
 , sensor_systems_id
 , measurands_id
+, logging_interval_seconds
+, averaging_interval_seconds
 , metadata
 FROM staging_sensors
 WHERE measurands_id is not null
@@ -303,9 +307,14 @@ AND sensor_systems_id is not null
 GROUP BY ingest_id
 , sensor_systems_id
 , measurands_id
+, logging_interval_seconds
+, averaging_interval_seconds
 , metadata
 ON CONFLICT (sensor_systems_id, measurands_id, source_id) DO UPDATE
 SET metadata = COALESCE(sensors.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}')
+  , data_logging_period_seconds = EXCLUDED.data_logging_period_seconds
+  , data_averaging_period_seconds = EXCLUDED.data_averaging_period_seconds
+  , modified_on = now()
 RETURNING 1)
 SELECT COUNT(1) INTO __inserted_sensors
 FROM inserts;

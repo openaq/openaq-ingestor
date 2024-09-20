@@ -223,6 +223,8 @@ class IngestClient:
                         "ingest_sensor_systems_id",
                         "measurand",
                         "units",
+                        "logging_interval_seconds",
+                        "averaging_interval_seconds",
                         "metadata",
                         "fetchlogs_id",
                     ],
@@ -367,6 +369,9 @@ class IngestClient:
                     sensor["measurand"] = value
                 elif key == "measurand_unit":
                     sensor["units"] = fix_units(value)
+                elif key == "interval_seconds":
+                    sensor["logging_interval_seconds"] = value
+                    sensor["averaging_interval_seconds"] = value
                 else:
                     metadata[key] = value
             if not sensor.get('measurand'):
