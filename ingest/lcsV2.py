@@ -208,6 +208,7 @@ class IngestClient:
                     "staging_sensorsystems",
                     [
                         "ingest_id",
+                        "instrument_ingest_id",
                         "ingest_sensor_nodes_id",
                         "metadata",
                         "fetchlogs_id",
@@ -223,6 +224,7 @@ class IngestClient:
                         "ingest_sensor_systems_id",
                         "measurand",
                         "units",
+                        "status",
                         "logging_interval_seconds",
                         "averaging_interval_seconds",
                         "metadata",
@@ -369,6 +371,8 @@ class IngestClient:
                     sensor["measurand"] = value
                 elif key == "measurand_unit":
                     sensor["units"] = fix_units(value)
+                elif key == "status":
+                    sensor["status"] = value
                 elif key == "interval_seconds":
                     sensor["logging_interval_seconds"] = value
                     sensor["averaging_interval_seconds"] = value
@@ -391,6 +395,11 @@ class IngestClient:
                 id = s.get("system_id")
             else:
                 id = node_id
+
+            ingest_arr = id.split('-')
+            if len(ingest_arr) == 3:
+                system["instrument_ingest_id"] = ingest_arr[-1];
+
             system["ingest_sensor_nodes_id"] = node_id
             system["ingest_id"] = id
             system["fetchlogs_id"] = fetchlogsId

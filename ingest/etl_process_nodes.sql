@@ -198,15 +198,18 @@ SELECT COUNT(1) INTO __rejected_systems
 FROM r;
 
 -- And finally we add/update the sensor systems
-INSERT INTO sensor_systems (sensor_nodes_id, source_id, metadata)
+INSERT INTO sensor_systems (sensor_nodes_id, source_id, instruments_id, metadata)
 SELECT sensor_nodes_id
-, ingest_id
+, s.ingest_id
+, i.instruments_id
 , metadata
-FROM staging_sensorsystems
+FROM staging_sensorsystems s
+LEFT JOIN instruments i ON (s.instrument_ingest_id = i.ingest_id)
 WHERE sensor_nodes_id IS NOT NULL
-GROUP BY sensor_nodes_id, ingest_id, metadata
+GROUP BY sensor_nodes_id, s.ingest_id, instruments_id, metadata
 ON CONFLICT (sensor_nodes_id, source_id) DO UPDATE SET
     metadata=COALESCE(sensor_systems.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}')
+    , instruments_id = EXCLUDED.instruments_id
     , modified_on = now();
 
 ----------------------------
@@ -294,14 +297,17 @@ INSERT INTO sensors (
 , measurands_id
 , data_logging_period_seconds
 , data_averaging_period_seconds
+, sensor_statuses_id
 , metadata)
 SELECT ingest_id
 , sensor_systems_id
 , measurands_id
 , logging_interval_seconds
 , averaging_interval_seconds
+, COALESCE(ss.sensor_statuses_id, 1)
 , metadata
-FROM staging_sensors
+FROM staging_sensors s
+LEFT JOIN sensor_statuses ss ON (ss.short_code = s.status)
 WHERE measurands_id is not null
 AND sensor_systems_id is not null
 GROUP BY ingest_id
@@ -309,11 +315,13 @@ GROUP BY ingest_id
 , measurands_id
 , logging_interval_seconds
 , averaging_interval_seconds
+, ss.sensor_statuses_id
 , metadata
 ON CONFLICT (sensor_systems_id, measurands_id, source_id) DO UPDATE
 SET metadata = COALESCE(sensors.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}')
   , data_logging_period_seconds = EXCLUDED.data_logging_period_seconds
   , data_averaging_period_seconds = EXCLUDED.data_averaging_period_seconds
+  , sensor_statuses_id = EXCLUDED.sensor_statuses_id
   , modified_on = now()
 RETURNING 1)
 SELECT COUNT(1) INTO __inserted_sensors

@@ -32,9 +32,9 @@ CREATE {table} IF NOT EXISTS staging_sensorsystems (
     sensor_systems_id int,
     is_new boolean DEFAULT true,
     ingest_id text NOT NULL UNIQUE,
+    instrument_ingest_id text,
     ingest_sensor_nodes_id text,
     sensor_nodes_id int,
-    instruments_id int,
     metadata jsonb,
     fetchlogs_id int
 );
@@ -45,6 +45,7 @@ CREATE {table} IF NOT EXISTS staging_sensors (
     sensors_id int,
     sensor_systems_id int,
     ingest_sensor_systems_id text,
+    status text,
     measurand text,
     units text,
     measurands_id int,
