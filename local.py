@@ -40,7 +40,8 @@ rows = [
   #  [1, '~/Downloads/1610335354.csv', '2022-01-01']
   #  [6, '~/Downloads/1722384430-2vfvm.json', '2024-07-30'],
   #  [7, '~/Downloads/1722384430-2vfvm_meas.json', '2024-07-30'],
-    [8, '~/Downloads/cac-pipeline/measures/cac/2024-09-19/1726784562-bjwvk.json.gz', '2024-09-19'], # all
+    [8, '~/Downloads/cac-pipeline/measures/cac/2024-10-09/test_data.json.gz', '2024-10-09'], # all with corrected coords
+  #  [8, '~/Downloads/cac-pipeline/measures/cac/2024-09-20/1726848957-v97dc.json.gz', '2024-09-20'], # all but wrong coords
   # [8, '~/Downloads/cac-pipeline/measures/cac/2024-09-19/1726780065-omd2r.json.gz', '2024-09-19'], # all but subset
   #  [8, '~/Downloads/cac-pipeline/measures/cac/2024-09-19/1726765257-gd32p.json.gz', '2024-09-19'], # no meas with man/mdl
  #   [8, '~/Downloads/cac-pipeline/measures/cac/2024-09-19/1726776893-wt7d.json.gz', '2024-09-19'], # no meas no man/mdl
@@ -59,11 +60,12 @@ client = IngestClient()
 client.load_keys(rows)
 
 ## dump just the locations
-# client.dump_locations()
+client.dump_locations(load=True)
+client.dump_measurements(load=True)
 ## dump just the measurements
 # client.dump_measurements
 ## Dump both
-client.dump()
+#client.dump()
 
 # #client.load(data)
 # client.load_metadata(data['meta'])

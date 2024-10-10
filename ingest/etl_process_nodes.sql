@@ -35,7 +35,7 @@ WHERE units IN ('µg/m��','��g/m³', 'ug/m3');
 
 
 
--- match the locations to the nodes using the source_name/id combo
+-- match the locations to existing nodes using the source_name/id combo
 UPDATE staging_sensornodes
 SET sensor_nodes_id = s.sensor_nodes_id
 , timezones_id = s.timezones_id
@@ -156,6 +156,7 @@ FROM r;
 -- Sensor Systems --
 --------------------
 
+
 -- make sure that we have a system entry for every ingest_id
 -- this is to deal with fetchers that do not add these data
 INSERT INTO staging_sensorsystems (sensor_nodes_id, ingest_id, fetchlogs_id, metadata)
@@ -165,9 +166,10 @@ SELECT sensor_nodes_id
 , fetchlogs_id
 , '{"note":"automatically added for sensor node"}'
 FROM staging_sensornodes
-WHERE is_new
+WHERE is_new AND ingest_id NOT IN (SELECT ingest_sensor_nodes_id FROM staging_sensorsystems)
 ON CONFLICT (ingest_id) DO UPDATE
-  SET sensor_nodes_id = EXCLUDED.sensor_nodes_id;
+  SET sensor_nodes_id = EXCLUDED.sensor_nodes_id
+  ;
 
 -- Now match the sensor nodes to the system
 UPDATE staging_sensorsystems
@@ -345,6 +347,59 @@ WHERE sensors_id IS NULL
 RETURNING 1)
 SELECT COUNT(1) INTO __rejected_sensors
 FROM r;
+
+-- update the period so that we dont have to keep doing it later
+-- we could do this on import as well if we feel this is slowing us down
+UPDATE staging_flags
+  SET period = tstzrange(COALESCE(datetime_from, '-infinity'::timestamptz),COALESCE(datetime_to, 'infinity'::timestamptz), '[]');
+
+-- Now we have to match things
+-- get the right node id and sensors id for the flags
+UPDATE staging_flags
+SET sensors_id = s.sensors_id
+  , sensor_nodes_id = sy.sensor_nodes_id
+FROM sensors s
+JOIN sensor_systems sy ON (s.sensor_systems_id = sy.sensor_systems_id)
+WHERE staging_flags.sensor_ingest_id = s.source_id;
+
+-- and then get the right flags_id
+UPDATE staging_flags
+SET flags_id = f.flags_id
+FROM flags f
+WHERE split_part(staging_flags.ingest_id, '::', 1) = f.ingest_id;
+
+-- now we should look to see if we should be just extending a flag
+UPDATE staging_flags sf
+  SET flagged_measurements_id = fm.flagged_measurements_id
+  FROM flagged_measurements fm
+  -- where the core information is the same (exactly)
+  WHERE sf.sensor_nodes_id = fm.sensor_nodes_id
+  AND sf.flags_id = fm.flags_id
+  AND sf.note = fm.note
+  -- the periods touch or overlap
+  AND fm.period && sf.period
+  -- and the flagged record sensors contains the current sensors
+  AND fm.sensors_ids @> ARRAY[sf.sensors_id];
+
+-- and finally we will insert the new flags
+INSERT INTO flagged_measurements (flags_id, sensor_nodes_id, sensors_ids, period, note)
+  SELECT flags_id
+  , sensor_nodes_id
+  , CASE WHEN sensors_id IS NOT NULL THEN ARRAY[sensors_id] ELSE NULL END
+  , period
+  , note
+  FROM staging_flags
+  WHERE flags_id IS NOT NULL
+  AND sensor_nodes_id IS NOT NULL
+  AND flagged_measurements_id IS NULL;
+
+-- And then update any that need to be updated
+ UPDATE flagged_measurements fm
+  SET period = sf.period + fm.period
+  , note = sf.note
+  FROM staging_flags sf
+  WHERE sf.flagged_measurements_id = fm.flagged_measurements_id;
+
 
 ------------------
 -- Return stats --

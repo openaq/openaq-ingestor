@@ -2,6 +2,7 @@ DROP TABLE IF EXISTS
   staging_sensornodes
 , staging_sensorsystems
 , staging_sensors
+, staging_flags
 , staging_keys;
 
 CREATE {table} IF NOT EXISTS staging_keys (
@@ -51,6 +52,21 @@ CREATE {table} IF NOT EXISTS staging_sensors (
     measurands_id int,
     averaging_interval_seconds int,
     logging_interval_seconds int,
+    metadata jsonb,
+    fetchlogs_id int
+);
+
+CREATE {table} IF NOT EXISTS staging_flags (
+    ingest_id text NOT NULL,
+    sensor_ingest_id text NOT NULL,
+    flagged_measurements_id int,
+    sensor_nodes_id int,
+    sensors_id int,
+    flags_id int,
+    datetime_from timestamptz,
+    datetime_to timestamptz,
+    period tstzrange,
+    note text,
     metadata jsonb,
     fetchlogs_id int
 );

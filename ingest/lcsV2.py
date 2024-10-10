@@ -84,6 +84,7 @@ class IngestClient:
         self.st = datetime.now().replace(tzinfo=pytz.UTC)
         self.sensors = []
         self.systems = []
+        self.flags = []
         self.nodes = []
         self.node_ids = {}
         self.measurements = []
@@ -149,7 +150,7 @@ class IngestClient:
         if len(self.measurements)>0 or len(self.keys)>0:
             self.dump_measurements()
 
-    def dump_locations(self):
+    def dump_locations(self, load: bool = True):
         """
         Dump the nodes into the temporary tables
         """
@@ -161,7 +162,7 @@ class IngestClient:
 
                 cursor.execute(get_query(
                     "temp_locations_dump.sql",
-                    table="TEMP TABLE" if settings.USE_TEMP_TABLES else "TABLE"
+                    table="TEMP TABLE" if (settings.USE_TEMP_TABLES and load) else "TABLE"
                 ))
 
                 write_csv(
@@ -231,11 +232,28 @@ class IngestClient:
                         "fetchlogs_id",
                     ],
                 )
+
+                write_csv(
+                    cursor,
+                    self.flags,
+                    "staging_flags",
+                    [
+                        "ingest_id",
+                        "sensor_ingest_id",
+                        "datetime_from",
+                        "datetime_to",
+                        "note",
+                        "metadata",
+                        "fetchlogs_id",
+                    ],
+                )
+
                 connection.commit()
 
                 # and now we load all the nodes,systems and sensors
-                query = get_query("etl_process_nodes.sql")
-                cursor.execute(query)
+                if load:
+                    query = get_query("etl_process_nodes.sql")
+                    cursor.execute(query)
 
                 for notice in connection.notices:
                     logger.debug(notice)
@@ -255,7 +273,7 @@ class IngestClient:
                     logger.debug(notice)
 
 
-    def dump_measurements(self):
+    def dump_measurements(self, load: bool = True):
         logger.debug(f"Dumping {len(self.measurements)} measurements")
         with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
             connection.set_session(autocommit=True)
@@ -264,7 +282,7 @@ class IngestClient:
 
                 cursor.execute(get_query(
                     "temp_measurements_dump.sql",
-                    table="TEMP TABLE" if settings.USE_TEMP_TABLES else 'TABLE'
+                    table="TEMP TABLE" if (settings.USE_TEMP_TABLES and load) else 'TABLE'
                 ))
 
                 iterator = StringIteratorIO(
@@ -278,18 +296,19 @@ class IngestClient:
                     iterator,
                 )
 
-                # process the measurements
-                logger.info(f'processing {len(self.measurements)} measurements');
-                query = get_query("etl_process_measurements.sql")
-                try:
-                    cursor.execute(query)
-                    connection.commit()
-                    logger.info("dump_measurements: measurements: %s; time: %0.4f", len(self.measurements), time() - start_time)
-                    for notice in connection.notices:
-                        logger.debug(notice)
+                if load:
+                    logger.info(f'processing {len(self.measurements)} measurements');
+                    query = get_query("etl_process_measurements.sql")
+                    try:
+                        cursor.execute(query)
+                        connection.commit()
+                        logger.info("dump_measurements: measurements: %s; time: %0.4f", len(self.measurements), time() - start_time)
+                        for notice in connection.notices:
+                            logger.debug(notice)
 
-                except Exception as err:
-                    logger.error(err)
+                    except Exception as err:
+                        logger.error(err)
+
 
     def load(self, data = {}):
         if "meta" in data.keys():
@@ -298,6 +317,7 @@ class IngestClient:
             self.load_locations(data.get('locations'))
         if "measures" in data.keys():
             self.load_measurements(data.get('measures'))
+
 
     def load_keys(self, rows):
         # for each fetchlog we need to read and load
@@ -357,16 +377,27 @@ class IngestClient:
         logger.debug(f'Loaded measurements')
 
 
+
     def add_sensor(self, j, system_id, fetchlogsId):
         for s in j:
             sensor = {}
             metadata = {}
             sensor["ingest_sensor_systems_id"] = system_id
             sensor["fetchlogs_id"] = fetchlogsId
+
+            if "sensor_id" in s:
+                id = s.get("sensor_id")
+            elif "id" in s:
+                id = s.get("id")
+            else:
+                id = system_id
+
+            sensor["ingest_id"] = id
+
             for key, value in s.items():
                 key = str.replace(key, "sensor_", "")
-                if key == "id":
-                    sensor["ingest_id"] = value
+                if key == "flags":
+                    self.add_flags(value, id, fetchlogsId)
                 elif key == "measurand_parameter":
                     sensor["measurand"] = value
                 elif key == "measurand_unit":
@@ -384,6 +415,30 @@ class IngestClient:
                 sensor['measurand'] = ingest_arr[-1]
             sensor["metadata"] = orjson.dumps(metadata).decode()
             self.sensors.append(sensor)
+
+    def add_flags(self, flags, sensor_id, fetchlogsId):
+        for f in flags:
+            flag = {}
+            metadata = {}
+            flag["sensor_ingest_id"] = sensor_id
+            flag["fetchlogs_id"] = fetchlogsId
+            for key, value in f.items():
+                key = str.replace(key, "flag_", "")
+                if key == "id":
+                    v = str.replace(value, f"{sensor_id}-", "")
+                    flag["ingest_id"] = v
+
+                elif key == 'datetime_from':
+                    flag["datetime_from"] = value
+                elif key == 'datetime_to':
+                    flag["datetime_to"] = value
+                elif key == 'note':
+                    flag["note"] = value
+                else:
+                    metadata[key] = value
+
+            flag["metadata"] = orjson.dumps(metadata).decode()
+            self.flags.append(flag)
 
     def add_systems(self, j, node_id, fetchlogsId):
         for s in j:
