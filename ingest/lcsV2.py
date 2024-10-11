@@ -86,7 +86,9 @@ class IngestClient:
         self.systems = []
         self.flags = []
         self.nodes = []
-        self.node_ids = {}
+        self.node_ids = []
+        self.system_ids = []
+        self.sensor_ids = []
         self.measurements = []
         self.matching_method = 'ingest-id'
         self.source = None
@@ -137,7 +139,7 @@ class IngestClient:
                 value = func(key, data)
         return col, value
 
-    def dump(self):
+    def dump(self, load: bool = True):
         """
         Dump any data that is currenly loaded into the database
         We will dump if there is data OR if we have loaded any keys
@@ -146,15 +148,16 @@ class IngestClient:
         """
         logger.debug(f"Dumping data from {len(self.keys)} files")
         if len(self.nodes)>0 or len(self.keys)>0:
-            self.dump_locations()
+            self.dump_locations(load)
         if len(self.measurements)>0 or len(self.keys)>0:
-            self.dump_measurements()
+            self.dump_measurements(load)
 
     def dump_locations(self, load: bool = True):
         """
         Dump the nodes into the temporary tables
         """
-        logger.debug(f"Dumping {len(self.nodes)} nodes")
+        db_table = "TEMP TABLE" if (settings.USE_TEMP_TABLES and load) else "TABLE"
+        logger.debug(f"Dumping {len(self.nodes)} nodes using {db_table} ({settings.USE_TEMP_TABLES}|{load})")
         with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
             connection.set_session(autocommit=True)
             with connection.cursor() as cursor:
@@ -162,7 +165,7 @@ class IngestClient:
 
                 cursor.execute(get_query(
                     "temp_locations_dump.sql",
-                    table="TEMP TABLE" if (settings.USE_TEMP_TABLES and load) else "TABLE"
+                    table=db_table
                 ))
 
                 write_csv(
@@ -273,8 +276,10 @@ class IngestClient:
                     logger.debug(notice)
 
 
+
     def dump_measurements(self, load: bool = True):
-        logger.debug(f"Dumping {len(self.measurements)} measurements")
+        db_table = "TEMP TABLE" if (settings.USE_TEMP_TABLES and load) else "TABLE"
+        logger.debug(f"Dumping {len(self.measurements)} measurements using {db_table} ({settings.USE_TEMP_TABLES}|{load})")
         with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
             connection.set_session(autocommit=True)
             with connection.cursor() as cursor:
@@ -282,7 +287,7 @@ class IngestClient:
 
                 cursor.execute(get_query(
                     "temp_measurements_dump.sql",
-                    table="TEMP TABLE" if (settings.USE_TEMP_TABLES and load) else 'TABLE'
+                    table=db_table
                 ))
 
                 iterator = StringIteratorIO(
@@ -319,6 +324,24 @@ class IngestClient:
             self.load_measurements(data.get('measures'))
 
 
+    def reset(self):
+        """
+        Reset the client to the new state. Mostly for testing purposes
+        """
+        logger.debug("Reseting the client data")
+        self.measurements = []
+        self.nodes = []
+        self.systems = []
+        self.sensors = []
+        self.flags = []
+        self.keys = []
+        self.key = None
+        self.fetchlogs_id = None
+        self.node_ids = []
+        self.system_ids = []
+        self.sensor_ids = []
+
+
     def load_keys(self, rows):
         # for each fetchlog we need to read and load
         for row in rows:
@@ -341,7 +364,10 @@ class IngestClient:
         else:
             content = select_object(key)
 
-        logger.debug(f"Read content containing {len(content)} lines: {is_json}")
+        if is_json:
+            logger.debug(f"Read JSON containing {len(content)} characters")
+        else:
+            logger.debug(f"Read CSV containing {len(content)} lines")
 
         if is_csv:
             # all csv data will be measurements
@@ -392,6 +418,11 @@ class IngestClient:
             else:
                 id = system_id
 
+            if id in self.sensor_ids:
+                # would it make more sense to merge or skip or throw error?
+                # merge and submit a warning maybe?
+                continue
+
             sensor["ingest_id"] = id
 
             for key, value in s.items():
@@ -415,6 +446,7 @@ class IngestClient:
                 sensor['measurand'] = ingest_arr[-1]
             sensor["metadata"] = orjson.dumps(metadata).decode()
             self.sensors.append(sensor)
+            self.sensor_ids.append(id)
 
     def add_flags(self, flags, sensor_id, fetchlogsId):
         for f in flags:
@@ -451,6 +483,10 @@ class IngestClient:
             else:
                 id = node_id
 
+            if id in self.system_ids:
+                # would it make more sense to merge or skip or throw error?
+                continue
+
             ingest_arr = id.split('-')
             if len(ingest_arr) == 3:
                 system["instrument_ingest_id"] = ingest_arr[-1];
@@ -466,6 +502,7 @@ class IngestClient:
                     metadata[key] = value
             system["metadata"] = orjson.dumps(metadata).decode()
             self.systems.append(system)
+            self.system_ids.append(id)
 
     def add_node(self, j):
         fetchlogs_id = j.get('fetchlogs_id', self.fetchlogs_id)
@@ -515,7 +552,7 @@ class IngestClient:
             # this does not save processing time of course
             if ingest_id not in self.node_ids:
                 node["metadata"] = orjson.dumps(metadata).decode()
-                self.node_ids[ingest_id] = True
+                self.node_ids.append(ingest_id)
                 self.nodes.append(node)
             # now look for systems
             if "sensor_system" in j.keys():

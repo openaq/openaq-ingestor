@@ -375,7 +375,7 @@ UPDATE staging_flags sf
   -- where the core information is the same (exactly)
   WHERE sf.sensor_nodes_id = fm.sensor_nodes_id
   AND sf.flags_id = fm.flags_id
-  AND sf.note = fm.note
+  AND ((sf.note = fm.note) OR (sf.note IS NULL AND fm.note IS NULL))
   -- the periods touch or overlap
   AND fm.period && sf.period
   -- and the flagged record sensors contains the current sensors
@@ -397,6 +397,7 @@ INSERT INTO flagged_measurements (flags_id, sensor_nodes_id, sensors_ids, period
  UPDATE flagged_measurements fm
   SET period = sf.period + fm.period
   , note = sf.note
+  , modified_on = now()
   FROM staging_flags sf
   WHERE sf.flagged_measurements_id = fm.flagged_measurements_id;
 
