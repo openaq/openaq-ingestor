@@ -14,6 +14,16 @@
       "sensor_id": "local-test_site_1-co",
       "timestamp": "2024-01-02T00:00:00Z",
       "measure": 0.02
+    },
+    {
+      "sensor_id": "local-test_site_2-wind_speed",
+      "timestamp": "2024-01-01T00:00:00Z",
+      "measure": 0.01
+    },
+    {
+      "sensor_id": "local-test_site_2-wind_speed",
+      "timestamp": "2024-01-02T00:00:00Z",
+      "measure": 0.02
     }
   ],
   "locations": [

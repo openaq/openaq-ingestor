@@ -357,11 +357,16 @@ SET datetime_last = GREATEST(sensors_rollup.datetime_last, EXCLUDED.datetime_las
 
 
 -- Update the table that will help to track hourly rollups
-INSERT INTO hourly_stats (datetime)
-  SELECT date_trunc('hour', datetime)
-  FROM staging_inserted_measurements
-  GROUP BY 1
-ON CONFLICT (datetime) DO UPDATE
+-- this is a replacement to the hourly stats table
+INSERT INTO hourly_data_queue (datetime, tz_offset)
+  SELECT as_utc_hour(datetime, utc_offset(datetime, tz.tzid)), utc_offset(datetime, tz.tzid)
+  FROM staging_inserted_measurements m
+  JOIN sensors s ON (s.sensors_id = m.sensors_id)
+  JOIN sensor_systems sy ON (s.sensor_systems_id = sy.sensor_systems_id)
+  JOIN sensor_nodes sn ON (sy.sensor_nodes_id = sn.sensor_nodes_id)
+  JOIN timezones tz ON (sn.timezones_id = tz.timezones_id)
+  GROUP BY 1, 2
+ON CONFLICT (datetime, tz_offset) DO UPDATE
 SET modified_on = now();
 
 

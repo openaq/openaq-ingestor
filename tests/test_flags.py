@@ -33,7 +33,7 @@ client = IngestClient()
 client.load_keys([[1, './tests/test_file1.json', '2024-01-01']])
 ## load the data
 client.dump(load=True)
-#client.dump_locations(load=True)
+#client.dump_locations(load=False)
 #client.dump_measurements(load=True)
 
 client.reset()

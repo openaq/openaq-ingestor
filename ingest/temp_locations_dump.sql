@@ -43,6 +43,8 @@ CREATE {table} IF NOT EXISTS staging_sensorsystems (
 CREATE {table} IF NOT EXISTS staging_sensors (
     ingest_id text,
     is_new boolean DEFAULT true,
+   -- source_name text NOT NULL,
+   -- source_id text NOT NULL,
     sensors_id int,
     sensor_systems_id int,
     ingest_sensor_systems_id text,
@@ -59,10 +61,10 @@ CREATE {table} IF NOT EXISTS staging_sensors (
 CREATE {table} IF NOT EXISTS staging_flags (
     ingest_id text NOT NULL,
     sensor_ingest_id text NOT NULL,
-    flagged_measurements_id int,
+    flags_id int,
     sensor_nodes_id int,
     sensors_id int,
-    flags_id int,
+    flag_types_id int,
     datetime_from timestamptz,
     datetime_to timestamptz,
     period tstzrange,

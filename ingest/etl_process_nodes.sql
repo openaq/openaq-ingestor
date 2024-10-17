@@ -348,6 +348,7 @@ RETURNING 1)
 SELECT COUNT(1) INTO __rejected_sensors
 FROM r;
 
+
 -- update the period so that we dont have to keep doing it later
 -- we could do this on import as well if we feel this is slowing us down
 UPDATE staging_flags
@@ -364,17 +365,17 @@ WHERE staging_flags.sensor_ingest_id = s.source_id;
 
 -- and then get the right flags_id
 UPDATE staging_flags
-SET flags_id = f.flags_id
-FROM flags f
-WHERE split_part(staging_flags.ingest_id, '::', 1) = f.ingest_id;
+SET flag_types_id = ft.flag_types_id
+FROM flag_types ft
+WHERE split_part(staging_flags.ingest_id, '::', 1) = ft.ingest_id;
 
 -- now we should look to see if we should be just extending a flag
 UPDATE staging_flags sf
-  SET flagged_measurements_id = fm.flagged_measurements_id
-  FROM flagged_measurements fm
+  SET flags_id = fm.flags_id
+  FROM flags fm
   -- where the core information is the same (exactly)
   WHERE sf.sensor_nodes_id = fm.sensor_nodes_id
-  AND sf.flags_id = fm.flags_id
+  AND sf.flag_types_id = fm.flag_types_id
   AND ((sf.note = fm.note) OR (sf.note IS NULL AND fm.note IS NULL))
   -- the periods touch or overlap
   AND fm.period && sf.period
@@ -382,24 +383,24 @@ UPDATE staging_flags sf
   AND fm.sensors_ids @> ARRAY[sf.sensors_id];
 
 -- and finally we will insert the new flags
-INSERT INTO flagged_measurements (flags_id, sensor_nodes_id, sensors_ids, period, note)
-  SELECT flags_id
+INSERT INTO flags (flag_types_id, sensor_nodes_id, sensors_ids, period, note)
+  SELECT flag_types_id
   , sensor_nodes_id
   , CASE WHEN sensors_id IS NOT NULL THEN ARRAY[sensors_id] ELSE NULL END
   , period
   , note
   FROM staging_flags
-  WHERE flags_id IS NOT NULL
+  WHERE flag_types_id IS NOT NULL
   AND sensor_nodes_id IS NOT NULL
-  AND flagged_measurements_id IS NULL;
+  AND flags_id IS NULL;
 
 -- And then update any that need to be updated
- UPDATE flagged_measurements fm
+ UPDATE flags fm
   SET period = sf.period + fm.period
   , note = sf.note
   , modified_on = now()
   FROM staging_flags sf
-  WHERE sf.flagged_measurements_id = fm.flagged_measurements_id;
+  WHERE sf.flags_id = fm.flags_id;
 
 
 ------------------
