@@ -109,7 +109,9 @@ SELECT site_name
 , metadata
 , source_id
 , timezones_id
-, get_providers_id(source_name)
+-- default to the unknown provider
+-- just to make sure we have one set
+, COALESCE(get_providers_id(source_name), 1)
 , countries_id
 FROM staging_sensornodes
 WHERE sensor_nodes_id IS NULL

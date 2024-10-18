@@ -31,7 +31,7 @@
       "location": "local-test_site_1",
       "label": "Test Site #1",
       "lat": "45.56",
-      "lon": -125.45,
+      "lon": -123.45,
       "ismobile": "false",
       "systems": [
         {

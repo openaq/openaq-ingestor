@@ -41,3 +41,8 @@ client.reset()
 client.load_keys([[2, './tests/test_file2.json', '2024-01-02']])
 ## load the data
 client.dump(load=True)
+
+client.process_hourly_data()
+client.process_daily_data()
+client.process_annual_data()
+client.refresh_cached_tables()

@@ -617,6 +617,70 @@ class IngestClient:
             self.measurements.append([ingest_id, source_name, source_id, measurand, value, datetime, lon, lat, fetchlogs_id])
 
 
+
+    def refresh_cached_tables(self):
+        """
+        Refresh the cached tables that we use for most production endpoints.
+        Right now this is just for testing purposes
+        """
+        with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
+            connection.set_session(autocommit=True)
+            with connection.cursor() as cursor:
+                logger.debug("Refreshing the cached tables")
+                cursor.execute("REFRESH MATERIALIZED VIEW locations_view_cached;")
+                cursor.execute("REFRESH MATERIALIZED VIEW locations_manufacturers_cached;")
+                cursor.execute("REFRESH MATERIALIZED VIEW locations_latest_measurements_cached;")
+                cursor.execute("REFRESH MATERIALIZED VIEW providers_view_cached;")
+                cursor.execute("REFRESH MATERIALIZED VIEW countries_view_cached;")
+                cursor.execute("REFRESH MATERIALIZED VIEW parameters_view_cached;")
+
+
+
+    def process_hourly_data(self,n: int = 1000):
+        """
+        Process any pending hourly data rollups.
+        Right now this is just for testing purposes
+        """
+        with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
+            connection.set_session(autocommit=True)
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT datetime, tz_offset FROM fetch_hourly_data_jobs(%s)", (n,))
+                rows = cursor.fetchall()
+                for row in rows:
+                    cursor.execute("SELECT update_hourly_data(%s, %s)", row)
+                    connection.commit()
+
+
+    def process_daily_data(self,n: int = 500):
+        """
+        Process any pending daily data rollups.
+        Right now this is just for testing purposes
+        """
+        with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
+            connection.set_session(autocommit=True)
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT datetime, tz_offset FROM fetch_daily_data_jobs(%s)", (n,))
+                rows = cursor.fetchall()
+                for row in rows:
+                    cursor.execute("SELECT update_daily_data(%s, %s)", row)
+                    connection.commit()
+
+
+    def process_annual_data(self,n: int = 25):
+        """
+        Process any pending annual data rollups.
+        Right now this is just for testing purposes
+        """
+        with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
+            connection.set_session(autocommit=True)
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT datetime, tz_offset FROM fetch_annual_data_jobs(%s)", (n,))
+                rows = cursor.fetchall()
+                for row in rows:
+                    cursor.execute("SELECT update_annual_data(%s, %s)", row)
+                    connection.commit()
+
+
     def get_metadata(self):
         hasnew = False
         for obj in self.page:
@@ -644,11 +708,6 @@ class IngestClient:
             logger.debug(f"get_metadata:hasnew - {self.keys}")
             self.load_data()
 
-
-
-
-
-
 def create_staging_table(cursor):
 	# table and batch are used primarily for testing
 	cursor.execute(get_query(
@@ -669,6 +728,8 @@ def write_csv(cursor, data, table, columns):
         sio,
     )
     logger.debug(f"table: {table}; rowcount: {cursor.rowcount}")
+
+
 
 
 def load_metadata_bucketscan(count=100):
