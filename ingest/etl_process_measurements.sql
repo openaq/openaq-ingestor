@@ -52,12 +52,16 @@ FROM staging_measurements;
 -- that duplicate sensors with the same ingest/source id are created
 	-- this is a short term fix
 	-- a long term fix would not allow duplicate source_id's
-WITH ranked_sensors AS (
+WITH staged_sensors AS (
+  -- this first part signficantly speeds it up on slow machines
+  SELECT DISTINCT ingest_id
+  FROM staging_measurements
+), ranked_sensors AS (
   SELECT s.sensors_id
 	, s.source_id
 	, RANK() OVER (PARTITION BY s.source_id ORDER BY added_on ASC) as rnk
 	FROM sensors s
-	JOIN staging_measurements m ON (s.source_id = m.ingest_id)
+	JOIN staged_sensors m ON (s.source_id = m.ingest_id)
 ), active_sensors AS (
 	SELECT source_id
 	, sensors_id
@@ -67,6 +71,7 @@ WITH ranked_sensors AS (
 	SET sensors_id=s.sensors_id
 	FROM active_sensors s
 	WHERE s.source_id=ingest_id;
+
 
 -- Now we have to fill in any missing information
 -- first add the nodes and systems that dont exist
@@ -285,6 +290,7 @@ INSERT INTO sensors_rollup (
   , value_latest
   , value_count
   , value_avg
+  , value_sd
   , value_min
   , value_max
   , geom_latest
@@ -299,6 +305,7 @@ WITH numbered AS (
    , sum(1) OVER (PARTITION BY sensors_id) as value_count
    , min(datetime) OVER (PARTITION BY sensors_id) as datetime_min
    , avg(value) OVER (PARTITION BY sensors_id) as value_avg
+   , stddev(value) OVER (PARTITION BY sensors_id) as value_sd
    , row_number() OVER (PARTITION BY sensors_id ORDER BY datetime DESC) as rn
   FROM staging_inserted_measurements
 ), latest AS (
@@ -308,6 +315,7 @@ WITH numbered AS (
    , value
    , value_count
    , value_avg
+   , value_sd
    , datetime_min
    , lat
    , lon
@@ -320,6 +328,7 @@ SELECT l.sensors_id
 , l.value -- last value
 , l.value_count
 , l.value_avg
+, l.value_sd
 , l.value -- min
 , l.value -- max
 , public.pt3857(lon, lat)
@@ -348,12 +357,23 @@ SET datetime_last = GREATEST(sensors_rollup.datetime_last, EXCLUDED.datetime_las
 
 
 -- Update the table that will help to track hourly rollups
-INSERT INTO hourly_stats (datetime)
-  SELECT date_trunc('hour', datetime)
-  FROM staging_inserted_measurements
-  GROUP BY 1
-ON CONFLICT (datetime) DO UPDATE
-SET modified_on = now();
+-- this is a replacement to the hourly stats table
+  WITH inserted_hours AS (
+    -- first we group things, adding an hour to make it time-ending after truncating
+    SELECT datetime + '1h'::interval as datetime
+    , utc_offset(datetime + '1h'::interval, tz.tzid) as tz_offset
+    FROM staging_inserted_measurements m
+    JOIN sensors s ON (s.sensors_id = m.sensors_id)
+    JOIN sensor_systems sy ON (s.sensor_systems_id = sy.sensor_systems_id)
+    JOIN sensor_nodes sn ON (sy.sensor_nodes_id = sn.sensor_nodes_id)
+    JOIN timezones tz ON (sn.timezones_id = tz.timezones_id)
+    GROUP BY 1, 2
+   )
+    INSERT INTO hourly_data_queue (datetime, tz_offset)
+    SELECT as_utc_hour(datetime, tz_offset), tz_offset
+    FROM inserted_hours
+    ON CONFLICT (datetime, tz_offset) DO UPDATE
+    SET modified_on = now();
 
 
 --Update the export queue/logs to export these records
