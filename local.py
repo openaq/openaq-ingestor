@@ -31,27 +31,34 @@ logging.getLogger('botocore').setLevel(logging.WARNING)
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 
 
-
-
-rows = [
-    [3, '/home/christian/Downloads/habitatmap-1714036497-h84j.csv', '2024-01-01 00:00:00'],
-    [4, '/home/christian/Downloads/airgradient-1714003639-h32tu.csv', '2024-01-05'],
-    [5, '/home/christian/Downloads/senstate-1714007461-ivz5g.csv', '2021-02-01'],
-    [1, '/home/christian/Downloads/1610335354.csv', '2022-01-01']
-    [6, '/home/christian/Downloads/1722384430-2vfvm.json', '2024-07-30'],
-    [7, '/home/christian/Downloads/1722384430-2vfvm_meas.json', '2024-07-30']
-    ]
-
-
 # local files
 #load_measurements_db(pattern = '^/home/christian/.*\\.(csv|json)')
 # remote files, make sure it can at least read it
 #load_measurements_db()
 
 ## client based methods
+## get a client
 client = IngestClient()
-client.load_keys(rows)
+## load all the data into the client
+client.load_keys([
+    [8, '~/Downloads/cac-pipeline/measures/cac/2024-10-18/test_data.json.gz', '2024-10-09']
+])
+
+## dump just the locations
 client.dump()
+
+# rollups and cached tables
+client.process_hourly_data()
+client.process_daily_data()
+client.process_annual_data()
+client.refresh_cached_tables()
+
+#client.dump_locations(load=False)
+#client.dump_measurements(load=False)
+## dump just the measurements
+# client.dump_measurements
+## Dump both
+#client.dump()
 
 # #client.load(data)
 # client.load_metadata(data['meta'])
