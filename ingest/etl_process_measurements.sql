@@ -372,6 +372,7 @@ SET datetime_last = GREATEST(sensors_rollup.datetime_last, EXCLUDED.datetime_las
     INSERT INTO hourly_data_queue (datetime, tz_offset)
     SELECT as_utc_hour(datetime, tz_offset), tz_offset
     FROM inserted_hours
+    GROUP BY 1, 2
     ON CONFLICT (datetime, tz_offset) DO UPDATE
     SET modified_on = now();
 
