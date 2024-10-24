@@ -82,9 +82,12 @@ from ingest.settings import settings
 
 from ingest.lcs import (
     load_metadata,
+    load_metadata_batch,
+)
+
+from ingest.lcsV2 import (
     load_measurements,
     load_measurements_batch,
-    load_metadata_batch,
 )
 
 from ingest.fetch import (

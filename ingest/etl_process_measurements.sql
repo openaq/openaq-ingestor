@@ -53,7 +53,7 @@ FROM staging_measurements;
 	-- this is a short term fix
 	-- a long term fix would not allow duplicate source_id's
 WITH staged_sensors AS (
-  -- this first part signficantly speeds it up on slow machines
+  -- this first part significantly speeds it up on slow machines
   SELECT DISTINCT ingest_id
   FROM staging_measurements
 ), ranked_sensors AS (
@@ -375,6 +375,28 @@ SET datetime_last = GREATEST(sensors_rollup.datetime_last, EXCLUDED.datetime_las
     GROUP BY 1, 2
     ON CONFLICT (datetime, tz_offset) DO UPDATE
     SET modified_on = now();
+
+
+
+  WITH inserted_hours AS (
+    -- first we group things, adding an hour to make it time-ending after truncating
+    SELECT datetime + '1h'::interval as datetime
+    , utc_offset(datetime + '1h'::interval, tz.tzid) as tz_offset
+    FROM measurements m
+    JOIN sensors s ON (s.sensors_id = m.sensors_id)
+    JOIN sensor_systems sy ON (s.sensor_systems_id = sy.sensor_systems_id)
+    JOIN sensor_nodes sn ON (sy.sensor_nodes_id = sn.sensor_nodes_id)
+    JOIN timezones tz ON (sn.timezones_id = tz.timezones_id)
+    WHERE m.added_on > now() - '1h'::interval
+    GROUP BY 1, 2
+   )
+    INSERT INTO hourly_data_queue (datetime, tz_offset)
+    SELECT as_utc_hour(datetime, tz_offset), tz_offset
+    FROM inserted_hours
+    GROUP BY 1, 2
+    ON CONFLICT (datetime, tz_offset) DO UPDATE
+    SET modified_on = now();
+
 
 
 --Update the export queue/logs to export these records
