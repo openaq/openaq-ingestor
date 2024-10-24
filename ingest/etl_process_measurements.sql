@@ -377,28 +377,6 @@ SET datetime_last = GREATEST(sensors_rollup.datetime_last, EXCLUDED.datetime_las
     SET modified_on = now();
 
 
-
-  WITH inserted_hours AS (
-    -- first we group things, adding an hour to make it time-ending after truncating
-    SELECT datetime + '1h'::interval as datetime
-    , utc_offset(datetime + '1h'::interval, tz.tzid) as tz_offset
-    FROM measurements m
-    JOIN sensors s ON (s.sensors_id = m.sensors_id)
-    JOIN sensor_systems sy ON (s.sensor_systems_id = sy.sensor_systems_id)
-    JOIN sensor_nodes sn ON (sy.sensor_nodes_id = sn.sensor_nodes_id)
-    JOIN timezones tz ON (sn.timezones_id = tz.timezones_id)
-    WHERE m.added_on > now() - '1h'::interval
-    GROUP BY 1, 2
-   )
-    INSERT INTO hourly_data_queue (datetime, tz_offset)
-    SELECT as_utc_hour(datetime, tz_offset), tz_offset
-    FROM inserted_hours
-    GROUP BY 1, 2
-    ON CONFLICT (datetime, tz_offset) DO UPDATE
-    SET modified_on = now();
-
-
-
 --Update the export queue/logs to export these records
 --wrap it in a block just in case the database does not have this module installed
 --we subtract the second because the data is assumed to be time ending
