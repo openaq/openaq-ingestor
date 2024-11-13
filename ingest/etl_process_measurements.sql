@@ -328,7 +328,7 @@ SELECT l.sensors_id
 , l.value -- last value
 , l.value_count
 , l.value_avg
-, l.value_sd
+, COALESCE(l.value_sd, 0)
 , l.value -- min
 , l.value -- max
 , public.pt3857(lon, lat)
