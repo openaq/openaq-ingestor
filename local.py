@@ -41,7 +41,7 @@ logging.getLogger('urllib3').setLevel(logging.WARNING)
 client = IngestClient()
 ## load all the data into the client
 client.load_keys([
-    [4264878, '~/Downloads/openaq-fetches/lcs-etl-pipeline/measures/lovemyair/2024-11-12/1731445632-1snpf.json', '2024-10-23']
+    [1, '~/Downloads/openaq-fetches/lcs-etl-pipeline/measures/lovemyair/2024-11-12/1731445632-1snpf.json', '2024-10-23']
 ])
 
 ## dump just the locations
