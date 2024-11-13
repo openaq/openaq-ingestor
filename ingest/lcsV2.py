@@ -400,8 +400,6 @@ class IngestClient:
         logger.debug(f'Loading {len(measurements)} measurements')
         for meas in measurements:
             self.add_measurement(meas)
-        logger.debug(f'Loaded measurements')
-
 
 
     def add_sensor(self, j, system_id, fetchlogsId):
@@ -443,7 +441,7 @@ class IngestClient:
             if not sensor.get('measurand'):
                 # get it from the ingest id
                 ingest_arr = sensor.get('ingest_id').split('-')
-                sensor['measurand'] = ingest_arr[-1]
+                sensor['measurand'] = ingest_arr[-1] # take the last one
             sensor["metadata"] = orjson.dumps(metadata).decode()
             self.sensors.append(sensor)
             self.sensor_ids.append(id)
@@ -488,6 +486,7 @@ class IngestClient:
                 continue
 
             ingest_arr = id.split('-')
+            # this will not work with a uuid passed as a site id
             if len(ingest_arr) == 3:
                 system["instrument_ingest_id"] = ingest_arr[-1];
 
@@ -541,7 +540,8 @@ class IngestClient:
             # support ingest id that is just the source id
             if node.get('source_id') is None:
                 if len(ingest_arr)>1:
-                    node['source_id'] = ingest_arr[1]
+                    # updated to handle uuid
+                    node['source_id'] = '-'.join(ingest_arr[1:len(ingest_arr)])
                 else:
                     node['source_id'] = ingest_arr[0]
 
@@ -610,8 +610,8 @@ class IngestClient:
             return
 
         source_name = ingest_arr[0]
-        source_id = ingest_arr[1]
-        measurand = ingest_arr[2]
+        source_id = '-'.join(ingest_arr[1:len(ingest_arr)-1])
+        measurand = ingest_arr[-1]
 
         if not None in [ingest_id, datetime, source_name, source_id, measurand]:
             self.measurements.append([ingest_id, source_name, source_id, measurand, value, datetime, lon, lat, fetchlogs_id])

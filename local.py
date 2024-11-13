@@ -41,19 +41,19 @@ logging.getLogger('urllib3').setLevel(logging.WARNING)
 client = IngestClient()
 ## load all the data into the client
 client.load_keys([
-    [8, '~/Downloads/cac-pipeline/measures/cac/2024-10-18/test_data.json.gz', '2024-10-09']
+    [4264878, '~/Downloads/openaq-fetches/lcs-etl-pipeline/measures/lovemyair/2024-11-12/1731445632-1snpf.json', '2024-10-23']
 ])
 
 ## dump just the locations
 client.dump()
 
 # rollups and cached tables
-client.process_hourly_data()
-client.process_daily_data()
-client.process_annual_data()
-client.refresh_cached_tables()
+#client.process_hourly_data()
+#client.process_daily_data()
+#client.process_annual_data()
+#client.refresh_cached_tables()
 
-#client.dump_locations(load=False)
+#client.dump_locations(False)
 #client.dump_measurements(load=False)
 ## dump just the measurements
 # client.dump_measurements

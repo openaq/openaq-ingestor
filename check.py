@@ -5,8 +5,7 @@ import sys
 import orjson
 import psycopg2
 
-
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('check.py')
 
 #os.chdir('/home/christian/git/caparker/openaq-ingestor/ingest')
 #print(os.getcwd())
@@ -77,7 +76,7 @@ if args.keep:
     os.environ['USE_TEMP_TABLES'] = 'False'
 
 from botocore.exceptions import ClientError
-from ingest.handler import cronhandler, logger
+from ingest.handler import cronhandler
 from ingest.settings import settings
 
 from ingest.lcs import (
@@ -157,8 +156,6 @@ def check_realtime_key(key: str, fix: bool = False):
         mark_success(key=key, reset=True)
 
 
-logger.debug(settings)
-
 if args.file is not None:
     # check if the files exists
     # is it a realtime file or a lcs file?
@@ -175,6 +172,7 @@ if args.id is not None:
     # get just the keys
     keys = [log[1] for log in logs]
     # loop through and check each
+    logger.info(f"Downloading {len(keys)} files")
     for idx, key in enumerate(keys):
         if args.download:
             # we may be using the new source pat

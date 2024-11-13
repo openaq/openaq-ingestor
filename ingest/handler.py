@@ -39,7 +39,6 @@ def handler(event, context):
                         else:
                             keys = getKeysFromS3Record(record)
 
-                        logger.debug(keys)
                         for obj in keys:
                             bucket = obj['bucket']
                             key = obj['key']
