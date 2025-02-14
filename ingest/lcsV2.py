@@ -22,7 +22,7 @@ from .utils import (
     StringIteratorIO,
     fix_units,
     load_fetchlogs,
-    select_object,
+    get_object,
     get_file,
 )
 
@@ -362,7 +362,7 @@ class IngestClient:
         if os.path.exists(os.path.expanduser(key)):
             content = get_file(os.path.expanduser(key)).read()
         else:
-            content = select_object(key)
+            content = get_object(key)
 
         if is_json:
             logger.debug(f"Read JSON containing {len(content)} characters")
@@ -815,7 +815,7 @@ def load_metadata(keys):
 
 def get_measurements(key, fetchlogsId):
     start = time()
-    content = select_object(key)
+    content = get_object(key)
     fetch_time = time() - start
 
     ret = []

@@ -10,6 +10,11 @@ from pydantic import computed_field
 from pathlib import Path
 from os import environ
 
+def get_env():
+    parent = Path(__file__).resolve().parent.parent
+    env_file = Path.joinpath(parent, environ.get("DOTENV", ".env"))
+    return env_file
+
 
 class Settings(BaseSettings):
     DATABASE_READ_USER: str
@@ -40,7 +45,9 @@ class Settings(BaseSettings):
         return f"postgresql://{self.DATABASE_WRITE_USER}:{self.DATABASE_WRITE_PASSWORD}@{self.DATABASE_HOST}:{self.DATABASE_PORT}/{self.DATABASE_DB}"
 
     model_config = SettingsConfigDict(
-        extra="ignore", env_file=f"{environ.get('DOTENV', '.env')}", env_file_encoding="utf-8"
+        extra="ignore",
+        env_file=get_env(),
+        env_file_encoding="utf-8",
     )
 
 
