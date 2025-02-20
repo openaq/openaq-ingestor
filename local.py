@@ -41,11 +41,13 @@ logging.getLogger('urllib3').setLevel(logging.WARNING)
 client = IngestClient()
 ## load all the data into the client
 client.load_keys([
-    [1, '~/Downloads/openaq-fetches/lcs-etl-pipeline/measures/lovemyair/2024-11-12/1731445632-1snpf.json', '2024-10-23']
+   # [1, '~/Downloads/openaq-fetches/lcs-etl-pipeline/measures/airgradient/2025-02-14/1739542053-5n5q.json', '2024-10-23']
+   # [1, '/home/christian/Downloads/1739444861-6bvu.json', '2025-02-13']
+    [7786652, 'lcs-etl-pipeline/measures/airgradient/2025-02-14/1739549254-h5b0m.json.gz', '2025-02-14']
 ])
 
 ## dump just the locations
-client.dump()
+#client.dump()
 
 # rollups and cached tables
 #client.process_hourly_data()
@@ -53,8 +55,8 @@ client.dump()
 #client.process_annual_data()
 #client.refresh_cached_tables()
 
-#client.dump_locations(False)
-#client.dump_measurements(load=False)
+client.dump_locations()
+client.dump_measurements(load=True)
 ## dump just the measurements
 # client.dump_measurements
 ## Dump both
