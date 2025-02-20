@@ -1,5 +1,5 @@
 from typing import Union
-
+import subprocess
 from pydantic_settings import (
     BaseSettings,
     SettingsConfigDict,
@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     @computed_field
     def DATABASE_WRITE_URL(self) -> str:
         return f"postgresql://{self.DATABASE_WRITE_USER}:{self.DATABASE_WRITE_PASSWORD}@{self.DATABASE_HOST}:{self.DATABASE_PORT}/{self.DATABASE_DB}"
+
+    @computed_field
+    def GIT_COMMIT_HASH(self) -> str:
+        return subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode('ascii').strip()
 
     model_config = SettingsConfigDict(
         extra="ignore",

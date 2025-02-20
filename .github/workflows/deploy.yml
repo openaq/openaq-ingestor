@@ -3,7 +3,7 @@ name: Deploy ingestor
 on:
   push:
     branches:
-      - version/aeolus
+      - main
 
 jobs:
   deploy:
