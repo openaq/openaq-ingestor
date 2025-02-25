@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     @computed_field
     def DEPLOYMENT_ID(self) -> str:
         commit_hash = subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode('ascii').strip()
-        return f"{environ.get('CDK_DEFAULT_ACCOUNT', 'UK')}/{commit_hash}"
+        return f"{environ.get('USER', 'UK')}/{commit_hash}"
 
     model_config = SettingsConfigDict(
         extra="ignore",
