@@ -44,20 +44,35 @@ warnings.filterwarnings(
 
 def to_geometry(key, data):
     # could be passed as lat/lng or coordinates
-    if key in ['lat','lon']:
+    if key == 'coordinates':
+        data = data.get(key)
+
+    if 'lat' in data:
         lat = data.get('lat')
+    elif 'latitude' in data:
+        lat = data.get('latitude')
+
+    if 'lon' in data:
         lon = data.get('lon')
-    elif key == 'coordinates':
-        lat = data.get('coordinates', {}).get('lat')
-        lon = data.get('coordinates', {}).get('lon')
+    elif 'longitude' in data:
+        lon = data.get('longitude')
+
+    srid = data.get('srid', '4326')
+
     if None in [lat, lon]:
         raise Exception('Missing value for coordinates')
+
     # could add more checks
-    return f"SRID=4326;POINT({lon} {lat})"
+    return f"SRID={srid};POINT({lon} {lat})"
 
 def to_timestamp(key, data):
     dt = data.get(key)
     value = None
+
+    ## to handle the old realtime methods which passed a dict with utc/local back
+    if isinstance(dt, dict) and 'utc' in dt.keys():
+        dt = dt.get('utc')
+
     if dt in [None, '']:
         logger.warning('Passed none type value for timestamp')
         # no need for exception, we check for nones later
@@ -72,6 +87,17 @@ def to_timestamp(key, data):
         dt = dateparser.parse(dt).replace(tzinfo=timezone.utc)
 
     return dt.isoformat()
+
+def to_sensorid(key, data):
+    param = data.get(key)
+    location = data.get('location')
+    source = data.get('sourceName')
+    return f"{source}-{location}-{param}"
+
+def to_nodeid(key, data):
+    location = data.get(key)
+    source = data.get('sourceName')
+    return f"{source}-{location}"
 
 
 class IngestClient:
@@ -110,8 +136,11 @@ class IngestClient:
         self.measurement_map = {
             "sensor_id": {"col": "ingest_id"},
             "ingest_id": {"col": "ingest_id"},
+            "parameter": {"col": "ingest_id", "func": to_sensorid },
             "timestamp": {"col": "datetime", "func": to_timestamp },
             "datetime": {"col": "datetime", "func": to_timestamp },
+            "date": {"col": "datetime", "func": to_timestamp },
+            "coordinates": {"col":"geom","func": to_geometry },
             "measure": {"col": "value"},
             "value": {},
             "lat": {},
@@ -354,11 +383,13 @@ class IngestClient:
     def load_key(self, key, fetchlogs_id, last_modified):
         logger.debug(f"Loading key: {fetchlogs_id}//:{key}")
         is_csv = bool(re.search(r"\.csv(.gz)?$", key))
-        is_json = bool(re.search(r"\.(nd)?json(.gz)?$", key))
+        is_json = bool(re.search(r"\.json(.gz)?$", key))
+        is_ndjson = bool(re.search(r"\.ndjson(.gz)?$", key))
         self.fetchlogs_id = fetchlogs_id
 
         # is it a local file? This is used for dev
         # but likely fine to leave in
+        logger.info(os.path.expanduser(key))
         if os.path.exists(os.path.expanduser(key)):
             content = get_file(os.path.expanduser(key)).read()
         else:
@@ -373,6 +404,14 @@ class IngestClient:
             # all csv data will be measurements
             for rw in csv.reader(content.split("\n")):
                 self.add_measurement(rw)
+        elif is_ndjson:
+            logger.debug(len(content.split('\n')))
+            measures = []
+            for obj in content.split('\n'):
+                if obj != "":
+                    measures.append(orjson.loads(obj))
+            data = { "measures": measures }
+            self.load(data)
         elif is_json:
             # all json data should just be parsed and loaded
             data = orjson.loads(content)
@@ -593,6 +632,7 @@ class IngestClient:
             for k, v in m.items():
                 # pass the whole measure
                 col, value = self.process(k, m, self.measurement_map)
+                logger.debug(f"Mapping data: {k}/{v} = {col}/{value}")
                 if col is not None:
                     meas[col] = value
 
