@@ -45,8 +45,9 @@ class Settings(BaseSettings):
         return f"postgresql://{self.DATABASE_WRITE_USER}:{self.DATABASE_WRITE_PASSWORD}@{self.DATABASE_HOST}:{self.DATABASE_PORT}/{self.DATABASE_DB}"
 
     @computed_field
-    def GIT_COMMIT_HASH(self) -> str:
-        return subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode('ascii').strip()
+    def DEPLOYMENT_ID(self) -> str:
+        commit_hash = subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode('ascii').strip()
+        return f"{environ.get('CDK_DEFAULT_ACCOUNT', 'UK')}/{commit_hash}"
 
     model_config = SettingsConfigDict(
         extra="ignore",
