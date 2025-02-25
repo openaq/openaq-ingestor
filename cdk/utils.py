@@ -19,14 +19,16 @@ def create_dependencies_layer(
         function_name: str,
         requirements_path: Path
 ) -> aws_lambda.LayerVersion:
-    requirements_file = str(requirements_path.resolve())
+    #requirements_file = str(requirements_path.resolve())
     output_dir = f'../.build/{function_name}'
     layer_id = f'openaq-{function_name}-{env_name}-dependencies'
 
-    if not environ.get('SKIP_PIP'):
-        print(f'Building {layer_id} from {requirements_file} into {output_dir}')
+    if not environ.get('SKIP_BUILD'):
+        print(f'Building {layer_id} into {output_dir}')
         subprocess.run(
-            f"""python -m pip install -qq -r {requirements_file} \
+            f"""
+             poetry export --without=cdk -o requirements.txt --without-hashes && \
+             poetry run python -m pip install -qq -r requirements.txt \
             -t {output_dir}/python && \
             cd {output_dir}/python && \
             find . -type f -name '*.pyc' | \
@@ -47,5 +49,5 @@ def create_dependencies_layer(
         self,
         layer_id,
         code=layer_code,
-        compatible_runtimes=[aws_lambda.Runtime.PYTHON_3_9]
+        compatible_runtimes=[aws_lambda.Runtime.PYTHON_3_12]
     )

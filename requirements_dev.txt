@@ -1,3 +1,0 @@
--r requirements.txt
-boto3
-numpy

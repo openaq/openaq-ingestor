@@ -39,7 +39,6 @@ def handler(event, context):
                         else:
                             keys = getKeysFromS3Record(record)
 
-                        logger.debug(keys)
                         for obj in keys:
                             bucket = obj['bucket']
                             key = obj['key']
@@ -115,9 +114,14 @@ def cronhandler(event, context):
     pipeline_limit = settings.PIPELINE_LIMIT if 'pipeline_limit' not in event else event['pipeline_limit']
     realtime_limit = settings.REALTIME_LIMIT if 'realtime_limit' not in event else event['realtime_limit']
     metadata_limit = settings.METADATA_LIMIT if 'metadata_limit' not in event else event['metadata_limit']
+    fetchlogKey = event.get('fetchlogKey')
+
+    # this is mostly for debuging and running the occasional file from the aws console
+    if fetchlogKey is not None:
+        limit = event.get('limit', 10)
+        return load_measurements_db(limit=limit, ascending=True, pattern=fetchlogKey)
 
     logger.info(f"Running cron job: {event['source']}, ascending: {ascending}")
-
     # these exceptions are just a failsafe so that if something
     # unaccounted for happens we can still move on to the next
     # process. In case of this type of exception we will need to

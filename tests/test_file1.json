@@ -1,0 +1,120 @@
+{
+  "meta": {
+    "schema": "v0.1",
+    "source": "local",
+    "matching_method": "ingest-id"
+  },
+  "measures": [
+    {
+      "sensor_id": "local-test_site_1-co",
+      "timestamp": "2024-01-01T00:00:00Z",
+      "measure": 0.01
+    },
+    {
+      "sensor_id": "local-test_site_1-co",
+      "timestamp": "2024-01-02T00:00:00Z",
+      "measure": 0.02
+    },
+    {
+      "sensor_id": "local-test_site_2-wind_speed",
+      "timestamp": "2024-01-01T00:00:00Z",
+      "measure": 0.01
+    },
+    {
+      "sensor_id": "local-test_site_2-wind_speed",
+      "timestamp": "2024-01-02T00:00:00Z",
+      "measure": 0.02
+    }
+  ],
+  "locations": [
+    {
+      "location": "local-test_site_1",
+      "label": "Test Site #1",
+      "lat": "45.56",
+      "lon": -123.45,
+      "ismobile": "false",
+      "systems": [
+        {
+          "system_id": "local-test_site_1-metone:aio2",
+          "manufacturer_name": "MetOne",
+          "model_name": "AIO2",
+          "sensors": [
+            {
+              "sensor_id": "local-test_site_1-wind_speed",
+              "status": "u",
+              "parameter": "ws",
+              "interval_seconds": "3600",
+              "flags": [
+                {
+                  "flag_id": "local-test_site_1-wind_speed-info::2024-01-01",
+                  "datetime_from": "2024-01-01",
+                  "datetime_to": "2024-01-02",
+                  "flag_name": "info",
+                  "note": "initial flag for sensor"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "system_id": "local-test_site_1-ecotech:serinus_30",
+          "manufacturer_name": "Ecotech",
+          "model_name": "Serinus 30",
+          "sensors": [
+            {
+              "sensor_id": "local-test_site_1-co",
+              "status": "u",
+              "parameter": "co",
+              "interval_seconds": "3600",
+              "flags": [
+                {
+                  "flag_id": "local-test_site_1-co-info::2024-01-01",
+                  "datetime_from": "2024-01-01",
+                  "datetime_to": "2024-01-05",
+                  "flag_name": "info"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "location": "local-test_site_2",
+      "label": "Test Site #2",
+      "lat": "47.56",
+      "lon": -124.45,
+      "ismobile": "false",
+      "systems": [
+        {
+          "system_id": "local-test_site_2-metone:aio2",
+          "manufacturer_name": "MetOne",
+          "model_name": "AIO2",
+          "sensors": [
+            {
+              "sensor_id": "local-test_site_2-wind_speed",
+              "status": "u",
+              "parameter": "ws",
+              "interval_seconds": "3600",
+              "flags": []
+            },
+            {
+              "sensor_id": "local-test_site_2-wind_direction",
+              "status": "u",
+              "parameter": "wd",
+              "interval_seconds": "3600",
+              "flags": [
+                {
+                  "flag_id": "local-test_site_2-wind_direction-error::2024-01-01",
+                  "datetime_from": "2024-01-01",
+                  "datetime_to": "2024-01-02",
+                  "flag_name": "info"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

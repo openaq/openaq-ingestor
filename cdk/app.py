@@ -32,9 +32,9 @@ ingest = LambdaIngestStack(
     lambda_env=lambda_env,
     fetch_bucket=settings.FETCH_BUCKET,
 	vpc_id=settings.VPC_ID,
-    ingest_lambda_timeout=settings.INGEST_LAMBDA_TIMEOUT,
-    ingest_lambda_memory_size=settings.INGEST_LAMBDA_MEMORY_SIZE,
-    ingest_rate_minutes=settings.INGEST_RATE_MINUTES,
+    lambda_timeout=settings.LAMBDA_TIMEOUT,
+    lambda_memory_size=settings.LAMBDA_MEMORY_SIZE,
+    rate_minutes=settings.RATE_MINUTES,
     topic_arn=settings.TOPIC_ARN,
 	env=env,
 )

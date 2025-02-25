@@ -1,0 +1,59 @@
+{
+  "meta": {
+    "matching_method": "ingest-id",
+    "schema": "v0.1",
+    "source": "testing"
+  },
+  "locations": [
+    {
+      "location_id": "testing-ts1",
+      "site_id": "ts1",
+      "site_name": "test site #1",
+      "coordinates": {
+        "lat": 45.56665,
+        "lon": -123.12121,
+        "proj": "WSG84"
+      },
+      "ismobile": false,
+      "systems": [
+        {
+          "system_id": "testing-ts1",
+          "manufacturer_name": "default",
+          "model_name": "default",
+          "sensors": [
+            {
+              "sensor_id": "testing-ts1-pm25",
+              "parameter": "pm25",
+              "units": "ug/m3",
+              "averaging_interval_secs": 3600,
+              "logging_interval_secs": 3600,
+              "status": "asdf",
+              "flags": []
+            },
+            {
+              "sensor_id": "testing-ts1-temperature",
+              "parameter": "temperature",
+              "units": "f",
+              "averaging_interval_secs": 3600,
+              "logging_interval_secs": 3600,
+              "status": "asdf",
+              "flags": []
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "measures": [
+    {
+      "sensor_id": "testing-ts1-pm25",
+      "timestamp": "2024-01-01T00:00:00-08:00",
+      "value": 10
+    },
+    {
+      "sensor_id": "testing-ts1-temperature",
+      "timestamp": "2024-01-01T00:00:00-08:00",
+      "value": 80
+    }
+  ]
+}

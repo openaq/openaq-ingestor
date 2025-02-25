@@ -1,0 +1,49 @@
+{
+  "meta": {
+    "schema": "v0.1",
+    "source": "clarity",
+    "matching_method": "ingest-id"
+  },
+  "measures": [
+    {
+      "sensor_id": "clarity-1-pm25",
+      "measure": 26,
+      "timestamp": "2025-02-24T17:07:05.300Z",
+      "flags": {
+        "clarity/qc": "good"
+      }
+    },
+    {
+      "sensor_id": "clarity-1-pm10",
+      "measure": 10,
+      "timestamp": "2025-02-24T17:07:05.300Z",
+      "flags": {
+        "clarity/qc": "good"
+      }
+    },
+    {
+      "sensor_id": "clarity-2-pm25",
+      "measure": 1000,
+      "timestamp": "2025-02-24T17:07:04.016Z",
+      "flags": {
+        "clarity/qc": "bad"
+      }
+    }
+  ],
+  "locations": [
+    {
+      "location": "clarity-1",
+      "label": "station 1",
+      "ismobile": false,
+      "lon": -118.18395,
+      "lat": 33.99324
+    },
+    {
+      "location": "clarity-2",
+      "label": "station 2",
+      "ismobile": false,
+      "lon": -120.10958,
+      "lat": 36.34121
+    }
+ ]
+}
