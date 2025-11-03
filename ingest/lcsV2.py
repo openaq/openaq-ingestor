@@ -123,10 +123,12 @@ class IngestClient:
             "site_name": { "col":"site_name" },
             "source_name": {},
             "ismobile": {},
+            "key": {"col":"ingest_id"},
             "ingest_id": {},
-            "matching_method": {},
             "location": {"col":"ingest_id"},
             "sensor_node_id": {"col":"ingest_id"},
+            "ingestMatchingMethod": {"col":"matching_method"},
+            "matching_method": {},
             "label": {"col":"site_name"},
             "coordinates": {"col":"geom","func": to_geometry },
             "geometry": {"col":"geom", "func": to_geometry },
@@ -135,7 +137,7 @@ class IngestClient:
             }
         self.measurement_map = {
             "sensor_id": {"col": "ingest_id"},
-            "ingest_id": {"col": "ingest_id"},
+            "ingest_id": {},
             "parameter": {"col": "ingest_id", "func": to_sensorid },
             "timestamp": {"col": "datetime", "func": to_timestamp },
             "datetime": {"col": "datetime", "func": to_timestamp },
@@ -145,6 +147,7 @@ class IngestClient:
             "value": {},
             "lat": {},
             "lon": {},
+            "key":{"col": "ingest_id"},
             }
         # if fetchlogs_id but no key or data
         # get key
@@ -346,10 +349,13 @@ class IngestClient:
 
     def load(self, data = {}):
         if "meta" in data.keys():
+            logger.debug("loading metada")
             self.load_metadata(data.get('meta'))
         if "locations" in data.keys():
+            logger.debug("loading locations")
             self.load_locations(data.get('locations'))
         if "measures" in data.keys():
+            logger.debug("loading measurements")
             self.load_measurements(data.get('measures'))
 
 
@@ -425,9 +431,9 @@ class IngestClient:
 
     def load_metadata(self, meta):
         if "source" in meta.keys():
-            self.source = meta.get('source')
-        if "matching_method" in meta.keys():
-            self.matching_method = meta.get('matching_method')
+            self.source = meta.get('sourceName')
+        if "ingestMatchingMethod" in meta.keys():
+            self.matching_method = meta.get('ingestMatchingMethod')
         if "schema" in meta.keys():
             self.schema = meta.get('schema')
 
@@ -441,7 +447,7 @@ class IngestClient:
             self.add_measurement(meas)
 
 
-    def add_sensor(self, j, system_id, fetchlogsId):
+    def add_sensors(self, j, system_id, fetchlogsId):
         for s in j:
             sensor = {}
             metadata = {}
@@ -450,6 +456,8 @@ class IngestClient:
 
             if "sensor_id" in s:
                 id = s.get("sensor_id")
+            elif "key" in s:
+                id = s.get("key")
             elif "id" in s:
                 id = s.get("id")
             else:
@@ -462,6 +470,7 @@ class IngestClient:
 
             sensor["ingest_id"] = id
 
+            logger.debug(f'Adding sensor {s}')
             for key, value in s.items():
                 key = str.replace(key, "sensor_", "")
                 if key == "flags":
@@ -510,6 +519,7 @@ class IngestClient:
             self.flags.append(flag)
 
     def add_systems(self, j, node_id, fetchlogsId):
+        logger.debug(f'adding system')
         for s in j:
             system = {}
             metadata = {}
@@ -517,6 +527,8 @@ class IngestClient:
                 id = s.get("sensor_system_id")
             elif "system_id" in s:
                 id = s.get("system_id")
+            elif "key" in s:
+                id = s.get("key")
             else:
                 id = node_id
 
@@ -535,10 +547,11 @@ class IngestClient:
             for key, value in s.items():
                 key = str.replace(key, "sensor_system_", "")
                 if key == "sensors":
-                    self.add_sensor(value, id, fetchlogsId)
+                    self.add_sensors(value, id, fetchlogsId)
                 else:
                     metadata[key] = value
             system["metadata"] = orjson.dumps(metadata).decode()
+
             self.systems.append(system)
             self.system_ids.append(id)
 
@@ -562,6 +575,7 @@ class IngestClient:
             # check for id
             ingest_id = node.get('ingest_id')
             if ingest_id is None:
+                logger.error(f'Missing ingest id {node}')
                 raise Exception('Missing ingest id')
 
             ingest_arr = ingest_id.split('-')
@@ -584,7 +598,7 @@ class IngestClient:
                 else:
                     node['source_id'] = ingest_arr[0]
 
-            if node.get('matching_method') is None:
+            if node.get('ingestMatchingMethod') is None:
                 node['matching_method'] = self.matching_method
 
             # prevent adding the node more than once
@@ -644,6 +658,9 @@ class IngestClient:
             fetchlogs_id = m.get('fetchlogs_id', self.fetchlogs_id)
 
         # parse the ingest id here
+        if ingest_id is None:
+            raise Exception(f"Could not find ingest id in {meas}")
+
         ingest_arr = ingest_id.split('-')
         if len(ingest_arr) < 3:
             logger.warning(f'Not enough information in ingest-id: `{ingest_id}`')
@@ -756,6 +773,7 @@ def create_staging_table(cursor):
 	))
 
 def write_csv(cursor, data, table, columns):
+    logger.debug(f"table: {table}; rows: {data[0]}")
     fields = ",".join(columns)
     sio = StringIO()
     writer = csv.DictWriter(sio, columns)
@@ -767,7 +785,7 @@ def write_csv(cursor, data, table, columns):
         """,
         sio,
     )
-    logger.debug(f"table: {table}; rowcount: {cursor.rowcount}")
+    logger.debug(f"table: {table}; cursor rowcount: {cursor.rowcount}")
 
 
 
