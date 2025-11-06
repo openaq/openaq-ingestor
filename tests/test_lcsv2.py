@@ -65,11 +65,11 @@ def test_ingest_client_senstate():
     assert len(client.systems) == 0
     assert len(client.sensors) == 0
 
-@pytest.mark.skip(reason="placeholder because currently the transform format is not fully supported")
+
 def test_ingest_client_transform():
     client = IngestClient();
     client.load_key(get_path('testdata_transform.json'), 1, str(date.today()))
-    assert len(client.nodes) == 3
-    assert len(client.systems) == 0
-    assert len(client.sensors) == 0
-    assert len(client.measurements) == 2
+    assert len(client.nodes) == 1, "Client has the right number of nodes"
+    assert len(client.systems) == 1, "Client has the right number of systems"
+    assert len(client.sensors) == 2, "Client has the right number of sensors"
+    assert len(client.measurements) == 2, "Client has the right number of measurements"

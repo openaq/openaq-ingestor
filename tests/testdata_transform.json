@@ -1,12 +1,27 @@
 {
   "meta": {
-    "matching_method": "ingest-id",
+    "ingestMatchingMethod": "ingest-id",
     "schema": "v0.1",
-    "source": "testing"
+    "sourceName": "testing",
+    "startedOn": "2024-01-01T00:00:00-08:00",
+    "finishedOn": "2024-01-01T00:00:00-08:00",
+    "exportedOn": "2024-01-01T00:00:00-08:00",
+    "fetchSummary": {
+      "sourceName":"testing",
+      "locations":1,
+      "bounds": [45.56665, -123.12121, 45.56665, -123.12121],
+      "systems":1,
+      "sensors":2,
+      "flags":0,
+      "measurements":2,
+      "datetimeFrom":"2024-01-01T00:00:00-08:00",
+      "datetimeTo":"2024-01-01T00:00:00-08:00",
+      "errors": {}
+    }
   },
   "locations": [
     {
-      "location_id": "testing-ts1",
+      "key": "testing-ts1",
       "site_id": "ts1",
       "site_name": "test site #1",
       "coordinates": {
@@ -17,12 +32,12 @@
       "ismobile": false,
       "systems": [
         {
-          "system_id": "testing-ts1",
+          "key": "testing-ts1",
           "manufacturer_name": "default",
           "model_name": "default",
           "sensors": [
             {
-              "sensor_id": "testing-ts1-pm25",
+              "key": "testing-ts1-pm25",
               "parameter": "pm25",
               "units": "ug/m3",
               "averaging_interval_secs": 3600,
@@ -31,7 +46,7 @@
               "flags": []
             },
             {
-              "sensor_id": "testing-ts1-temperature",
+              "key": "testing-ts1-temperature",
               "parameter": "temperature",
               "units": "f",
               "averaging_interval_secs": 3600,
@@ -46,12 +61,12 @@
   ],
   "measures": [
     {
-      "sensor_id": "testing-ts1-pm25",
+      "key": "testing-ts1-pm25",
       "timestamp": "2024-01-01T00:00:00-08:00",
       "value": 10
     },
     {
-      "sensor_id": "testing-ts1-temperature",
+      "key": "testing-ts1-temperature",
       "timestamp": "2024-01-01T00:00:00-08:00",
       "value": 80
     }
