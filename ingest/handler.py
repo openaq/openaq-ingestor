@@ -3,7 +3,7 @@ import logging
 import psycopg2
 from .settings import settings
 from .lcs import load_metadata_db
-from .lcsV2 import load_measurements_db
+from .lcsV2 import load_measurements_db, load_measurements_pattern
 from .fetch import load_db
 from time import time
 import json
