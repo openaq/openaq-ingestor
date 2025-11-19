@@ -96,7 +96,7 @@ from ingest.fetch import (
 )
 
 from ingest.utils import (
-	load_fetchlogs,
+    load_fetchlogs,
     load_errors_list,
     load_errors_summary,
     load_rejects_summary,
@@ -210,26 +210,26 @@ elif args.batch is not None:
     load_metadata_batch(args.batch)
 
 elif args.pattern is not None:
-	keys = load_fetchlogs(pattern=args.pattern, limit=25, ascending=True)
+        keys = load_fetchlogs(pattern=args.pattern, limit=25, ascending=True)
     # loop through and check each
-	for row in keys:
-		id = row[0]
-		key = row[1]
-		last = row[2]
-		logger.debug(f"{key}: {id}")
-		if args.load:
-			if 'realtime' in key:
-				load_realtime([
+        for row in keys:
+                id = row[0]
+                key = row[1]
+                last = row[2]
+                logger.debug(f"{key}: {id}")
+                if args.load:
+                        if 'realtime' in key:
+                                load_realtime([
                     (id, key, last)
-							  ])
-			elif 'stations' in key:
-				load_metadata([
-					{"id": id, "Key": key, "LastModified": last}
-				])
-			else:
-				load_measurements([
-					(id, key, last)
-				])
+                                                          ])
+                        elif 'stations' in key:
+                                load_metadata([
+                                        {"id": id, "Key": key, "LastModified": last}
+                                ])
+                        else:
+                                load_measurements([
+                                        (id, key, last)
+                                ])
 
         if args.download:
             print(f'downloading: {key}')

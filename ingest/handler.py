@@ -119,7 +119,7 @@ def cronhandler(event, context):
     # this is mostly for debuging and running the occasional file from the aws console
     if fetchlogKey is not None:
         limit = event.get('limit', 10)
-        return load_measurements_db(limit=limit, ascending=True, pattern=fetchlogKey)
+        return load_measurements_pattern(limit=limit, pattern=fetchlogKey)
 
     logger.info(f"Running cron job: {event['source']}, ascending: {ascending}")
     # these exceptions are just a failsafe so that if something

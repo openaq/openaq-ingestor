@@ -21,6 +21,7 @@ from .utils import (
     clean_csv_value,
     StringIteratorIO,
     fix_units,
+    get_logs_from_pattern,
     load_fetchlogs,
     get_object,
     get_file,
@@ -773,7 +774,7 @@ def create_staging_table(cursor):
 	))
 
 def write_csv(cursor, data, table, columns):
-    logger.debug(f"table: {table}; rows: {data[0]}")
+    logger.debug(f"table: {table}")
     fields = ",".join(columns)
     sio = StringIO()
     writer = csv.DictWriter(sio, columns)
@@ -970,6 +971,32 @@ def load_measurements_file(fetchlogs_id: int):
                 ;
                 """,
                 (fetchlogs_id,),
+            )
+            rows = cursor.fetchall()
+            load_measurements(rows)
+
+def load_measurements_pattern(
+        pattern = '^lcs-etl-pipeline/measures/.*\\.(csv|json)',
+        limit=10
+    ):
+    rows = get_logs_from_pattern(pattern, limit)
+    load_measurements(rows)
+    return len(rows)
+
+def load_measurements_key(fetchlogKey: str):
+    with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
+        connection.set_session(autocommit=True)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT fetchlogs_id
+                , key
+                FROM fetchlogs
+                WHERE key = %s
+                LIMIT 1
+                ;
+                """,
+                (fetchlogKey,),
             )
             rows = cursor.fetchall()
             load_measurements(rows)
