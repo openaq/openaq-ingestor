@@ -384,8 +384,10 @@ class IngestClient:
             key = row[1]
             fetchlogs_id = row[0]
             last_modified = row[2]
-            self.load_key(key, fetchlogs_id, last_modified)
-
+            try:
+                self.load_key(key, fetchlogs_id, last_modified)
+            except Exception as e:
+                submit_file_error(key, e);
 
     def load_key(self, key, fetchlogs_id, last_modified):
         logger.debug(f"Loading key: {fetchlogs_id}//:{key}")
@@ -945,6 +947,7 @@ def submit_file_error(key, e):
                 UPDATE fetchlogs
                 SET completed_datetime = clock_timestamp()
                 , last_message = %s
+                , has_error = 't'
                 WHERE key = %s
                 """,
                 (f"ERROR: {e}", key),
