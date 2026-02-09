@@ -63,11 +63,13 @@ def handler(event, context):
                                 INSERT INTO fetchlogs (key
                                 , file_size
                                 , last_modified
+                                , init_datetime
                                 )
-                                VALUES(%s, %s, %s)
+                                VALUES(%s, %s, %s, now())
                                 ON CONFLICT (key) DO UPDATE
                                 SET last_modified=EXCLUDED.last_modified,
-                                completed_datetime=NULL RETURNING *;
+                                completed_datetime=NULL
+                                RETURNING *;
                                 """,
                                 (key, file_size, last_modified,),
                             )
