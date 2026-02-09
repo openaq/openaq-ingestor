@@ -3,7 +3,7 @@ import io
 import os
 import logging
 from time import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 import orjson
 
 import boto3
@@ -252,9 +252,9 @@ def load_prefix(prefix):
 @app.command()
 def load_range(
     start: datetime = typer.Argument(
-        (datetime.utcnow().date() - timedelta(days=3)).isoformat()
+        (datetime.now(UTC) - timedelta(days=3)).isoformat()
     ),
-    end: datetime = typer.Argument(datetime.utcnow().date().isoformat()),
+    end: datetime = typer.Argument(datetime.now(UTC).isoformat()),
 ):
     print(
         f"Loading data from {start.date().isoformat()}"

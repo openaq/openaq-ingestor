@@ -34,7 +34,7 @@ def handler(event, context):
                 with connection.cursor() as cursor:
                     connection.set_session(autocommit=True)
                     for record in records:
-                        if record['EventSource'] == 'aws:sns':
+                        if record.get('EventSource') == 'aws:sns':
                             keys = getKeysFromSnsRecord(record)
                         else:
                             keys = getKeysFromS3Record(record)
@@ -71,7 +71,7 @@ def handler(event, context):
                                 completed_datetime=NULL
                                 RETURNING *;
                                 """,
-                                (key, file_size, last_modified,),
+                                (key, file_size, last_modified, ),
                             )
                             row = cursor.fetchone()
                             connection.commit()

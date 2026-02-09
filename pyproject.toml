@@ -22,6 +22,29 @@ boto3 = "^1.34.124"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.4"
+pytest-env = "^1.1.5"
+moto = {extras = ["s3"], version = "^5.0.0"}
+pytest-mock = "^3.14.0"
+pytest-cov = "^4.1.0"
+freezegun = "^1.5.0"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--tb=short",
+]
+markers = [
+    "integration: Integration tests requiring database",
+    "s3: Tests requiring S3 mocking",
+]
+env = [
+    "DOTENV=.env.local",
+]
 
 [build-system]
 requires = ["poetry-core"]
