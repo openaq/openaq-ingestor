@@ -119,6 +119,8 @@ class IngestClient:
         self.measurements = []
         self.matching_method = 'ingest-id'
         self.source = None
+        self.connection = None
+        self.external_connection = False  # track if we manage it
         self.node_map = {
             "fetchlogs_id": {},
             "site_name": { "col":"site_name" },
@@ -157,6 +159,39 @@ class IngestClient:
         if data is not None and isinstance(data, dict):
             self.load(data)
 
+
+    def __del__(self):
+        logger.debug(f'WE ARE DELETING - {self.connection}')
+
+    def get_connection(self, autocommit: bool = True):
+      """Get existing connection or create new one."""
+      if self.connection is None or self.connection.closed:
+          self.connection = psycopg2.connect(settings.DATABASE_WRITE_URL)
+          self.connection.set_session(autocommit=autocommit)  # default behavior
+          self.external_connection = False
+      return self.connection
+
+    def set_connection(self, connection):
+      """Use an externally-managed connection (for testing)."""
+      self.connection = connection
+      self.external_connection = True
+      return self
+
+    def close(self):
+      """Close connection if we created it."""
+      print(f'Closing: {self.connection}')
+      if self.connection and not self.external_connection:
+          if not self.connection.closed:
+            self.connection.close()
+          self.connection = None
+
+    def commit(self):
+      """Commit connection if we created it."""
+      print(f'Committing: {self.connection}')
+      if self.connection and not self.external_connection:
+          self.connection.commit()
+
+
     def process(self, key, data, mp):
         col = None
         value = None
@@ -182,6 +217,7 @@ class IngestClient:
         logger.debug(f"Dumping data from {len(self.keys)} files")
         if len(self.nodes)>0 or len(self.keys)>0:
             self.dump_locations(load)
+        print(f'meas: {self.connection}')
         if len(self.measurements)>0 or len(self.keys)>0:
             self.dump_measurements(load)
 
@@ -191,161 +227,159 @@ class IngestClient:
         """
         db_table = "TEMP TABLE" if (settings.USE_TEMP_TABLES and load) else "TABLE"
         logger.debug(f"Dumping {len(self.nodes)} nodes using {db_table} ({settings.USE_TEMP_TABLES}|{load})")
-        with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-            connection.set_session(autocommit=True)
-            with connection.cursor() as cursor:
-                start_time = time()
+        connection = self.get_connection(True)
+        with connection.cursor() as cursor:
+            start_time = time()
 
-                cursor.execute(get_query(
-                    "temp_locations_dump.sql",
-                    table=db_table
-                ))
+            cursor.execute(get_query(
+                "temp_locations_dump.sql",
+                table=db_table
+            ))
 
-                write_csv(
-                    cursor,
-                    self.keys,
-                    f"staging_keys",
-                    [
-                        "key",
-                        "last_modified",
-                        "fetchlogs_id",
-                    ],
-                )
-                # update by id instead of key due to matching issue
-                cursor.execute(
-                    """
-                    UPDATE fetchlogs
-                    SET loaded_datetime = clock_timestamp()
-                    , last_message = 'load_data'
-                    WHERE fetchlogs_id IN (SELECT fetchlogs_id FROM staging_keys)
-                    """
-                )
-                connection.commit()
+            write_csv(
+                cursor,
+                self.keys,
+                f"staging_keys",
+                [
+                    "key",
+                    "last_modified",
+                    "fetchlogs_id",
+                ],
+            )
+            # update by id instead of key due to matching issue
+            cursor.execute(
+                """
+                UPDATE fetchlogs
+                SET loaded_datetime = clock_timestamp()
+                , last_message = 'load_data'
+                WHERE fetchlogs_id IN (SELECT fetchlogs_id FROM staging_keys)
+                """
+            )
 
-                write_csv(
-                    cursor,
-                    self.nodes,
-                    "staging_sensornodes",
-                    [
-                        "ingest_id",
-                        "site_name",
-                        "matching_method",
-                        "source_name",
-                        "source_id",
-                        "ismobile",
-                        "geom",
-                        "metadata",
-                        "fetchlogs_id",
-                    ],
-                )
+            write_csv(
+                cursor,
+                self.nodes,
+                "staging_sensornodes",
+                [
+                    "ingest_id",
+                    "site_name",
+                    "matching_method",
+                    "source_name",
+                    "source_id",
+                    "ismobile",
+                    "geom",
+                    "metadata",
+                    "fetchlogs_id",
+                ],
+            )
 
-                write_csv(
-                    cursor,
-                    self.systems,
-                    "staging_sensorsystems",
-                    [
-                        "ingest_id",
-                        "instrument_ingest_id",
-                        "ingest_sensor_nodes_id",
-                        "metadata",
-                        "fetchlogs_id",
-                    ],
-                )
+            write_csv(
+                cursor,
+                self.systems,
+                "staging_sensorsystems",
+                [
+                    "ingest_id",
+                    "instrument_ingest_id",
+                    "ingest_sensor_nodes_id",
+                    "metadata",
+                    "fetchlogs_id",
+                ],
+            )
 
-                write_csv(
-                    cursor,
-                    self.sensors,
-                    "staging_sensors",
-                    [
-                        "ingest_id",
-                        "ingest_sensor_systems_id",
-                        "measurand",
-                        "units",
-                        "status",
-                        "logging_interval_seconds",
-                        "averaging_interval_seconds",
-                        "metadata",
-                        "fetchlogs_id",
-                    ],
-                )
+            write_csv(
+                cursor,
+                self.sensors,
+                "staging_sensors",
+                [
+                    "ingest_id",
+                    "ingest_sensor_systems_id",
+                    "measurand",
+                    "units",
+                    "status",
+                    "logging_interval_seconds",
+                    "averaging_interval_seconds",
+                    "metadata",
+                    "fetchlogs_id",
+                ],
+            )
 
-                write_csv(
-                    cursor,
-                    self.flags,
-                    "staging_flags",
-                    [
-                        "ingest_id",
-                        "sensor_ingest_id",
-                        "datetime_from",
-                        "datetime_to",
-                        "note",
-                        "metadata",
-                        "fetchlogs_id",
-                    ],
-                )
+            write_csv(
+                cursor,
+                self.flags,
+                "staging_flags",
+                [
+                    "ingest_id",
+                    "sensor_ingest_id",
+                    "datetime_from",
+                    "datetime_to",
+                    "note",
+                    "metadata",
+                    "fetchlogs_id",
+                ],
+            )
 
-                connection.commit()
+            # and now we load all the nodes,systems and sensors
+            if load:
+                query = get_query("etl_process_nodes.sql")
+                cursor.execute(query)
 
-                # and now we load all the nodes,systems and sensors
-                if load:
-                    query = get_query("etl_process_nodes.sql")
-                    cursor.execute(query)
+            for notice in connection.notices:
+                logger.debug(notice)
 
-                for notice in connection.notices:
-                    logger.debug(notice)
+            cursor.execute(
+                """
+                UPDATE fetchlogs
+                SET completed_datetime = clock_timestamp()
+                , last_message = NULL
+                WHERE fetchlogs_id IN (SELECT fetchlogs_id FROM staging_keys)
+                """
+            )
 
-                cursor.execute(
-                    """
-                    UPDATE fetchlogs
-                    SET completed_datetime = clock_timestamp()
-                    , last_message = NULL
-                    WHERE fetchlogs_id IN (SELECT fetchlogs_id FROM staging_keys)
-                    """
-                )
+            logger.info("dump_locations: locations: %s; time: %0.4f", len(self.nodes), time() - start_time)
+            for notice in connection.notices:
+                logger.debug(notice)
 
-                connection.commit()
-                logger.info("dump_locations: locations: %s; time: %0.4f", len(self.nodes), time() - start_time)
-                for notice in connection.notices:
-                    logger.debug(notice)
+        self.close()
 
 
 
     def dump_measurements(self, load: bool = True):
         db_table = "TEMP TABLE" if (settings.USE_TEMP_TABLES and load) else "TABLE"
         logger.debug(f"Dumping {len(self.measurements)} measurements using {db_table} ({settings.USE_TEMP_TABLES}|{load})")
-        with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-            connection.set_session(autocommit=True)
-            with connection.cursor() as cursor:
-                start_time = time()
+        connection = self.get_connection(True)
 
-                cursor.execute(get_query(
-                    "temp_measurements_dump.sql",
-                    table=db_table
-                ))
+        with connection.cursor() as cursor:
+            start_time = time()
 
-                iterator = StringIteratorIO(
-                    (to_tsv(line) for line in self.measurements)
-                )
-                cursor.copy_expert(
-                    """
-                    COPY staging_measurements (ingest_id, source_name, source_id, measurand, value, datetime, lon, lat, fetchlogs_id)
-                    FROM stdin;
-                    """,
-                    iterator,
-                )
+            cursor.execute(get_query(
+                "temp_measurements_dump.sql",
+                table=db_table
+            ))
 
-                if load:
-                    logger.info(f'processing {len(self.measurements)} measurements');
-                    query = get_query("etl_process_measurements.sql")
-                    try:
-                        cursor.execute(query)
-                        connection.commit()
-                        logger.info("dump_measurements: measurements: %s; time: %0.4f", len(self.measurements), time() - start_time)
-                        for notice in connection.notices:
-                            logger.debug(notice)
+            iterator = StringIteratorIO(
+                (to_tsv(line) for line in self.measurements)
+            )
+            cursor.copy_expert(
+                """
+                COPY staging_measurements (ingest_id, source_name, source_id, measurand, value, datetime, lon, lat, fetchlogs_id)
+                FROM stdin;
+                """,
+                iterator,
+            )
 
-                    except Exception as err:
-                        logger.error(err)
+            if load:
+                logger.info(f'processing {len(self.measurements)} measurements');
+                query = get_query("etl_process_measurements.sql")
+                try:
+                    cursor.execute(query)
+                    logger.info("dump_measurements: measurements: %s; time: %0.4f", len(self.measurements), time() - start_time)
+                    for notice in connection.notices:
+                        logger.debug(notice)
+
+                except Exception as err:
+                    logger.error(err)
+
+        self.close()
 
 
     def load(self, data = {}):
@@ -683,17 +717,17 @@ class IngestClient:
         Refresh the cached tables that we use for most production endpoints.
         Right now this is just for testing purposes
         """
-        with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-            connection.set_session(autocommit=True)
-            with connection.cursor() as cursor:
-                logger.debug("Refreshing the cached tables")
-                cursor.execute("REFRESH MATERIALIZED VIEW locations_view_cached;")
-                cursor.execute("REFRESH MATERIALIZED VIEW locations_manufacturers_cached;")
-                cursor.execute("REFRESH MATERIALIZED VIEW locations_latest_measurements_cached;")
-                cursor.execute("REFRESH MATERIALIZED VIEW providers_view_cached;")
-                cursor.execute("REFRESH MATERIALIZED VIEW countries_view_cached;")
-                cursor.execute("REFRESH MATERIALIZED VIEW parameters_view_cached;")
+        connection = self.get_connection(True)
+        with connection.cursor() as cursor:
+            logger.debug("Refreshing the cached tables")
+            cursor.execute("REFRESH MATERIALIZED VIEW locations_view_cached;")
+            cursor.execute("REFRESH MATERIALIZED VIEW locations_manufacturers_cached;")
+            cursor.execute("REFRESH MATERIALIZED VIEW locations_latest_measurements_cached;")
+            cursor.execute("REFRESH MATERIALIZED VIEW providers_view_cached;")
+            cursor.execute("REFRESH MATERIALIZED VIEW countries_view_cached;")
+            cursor.execute("REFRESH MATERIALIZED VIEW parameters_view_cached;")
 
+        self.close()
 
 
     def process_hourly_data(self,n: int = 1000):
@@ -701,14 +735,14 @@ class IngestClient:
         Process any pending hourly data rollups.
         Right now this is just for testing purposes
         """
-        with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-            connection.set_session(autocommit=True)
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT datetime, tz_offset FROM fetch_hourly_data_jobs(%s)", (n,))
-                rows = cursor.fetchall()
-                for row in rows:
-                    cursor.execute("SELECT update_hourly_data(%s, %s)", row)
-                    connection.commit()
+        connection = self.get_connection(True)
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT datetime, tz_offset FROM fetch_hourly_data_jobs(%s)", (n,))
+            rows = cursor.fetchall()
+            for row in rows:
+                cursor.execute("SELECT update_hourly_data(%s, %s)", row)
+
+        self.close()
 
 
     def process_daily_data(self,n: int = 500):
@@ -716,14 +750,14 @@ class IngestClient:
         Process any pending daily data rollups.
         Right now this is just for testing purposes
         """
-        with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-            connection.set_session(autocommit=True)
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT datetime, tz_offset FROM fetch_daily_data_jobs(%s)", (n,))
-                rows = cursor.fetchall()
-                for row in rows:
-                    cursor.execute("SELECT update_daily_data(%s, %s)", row)
-                    connection.commit()
+        connection = self.get_connection(True)
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT datetime, tz_offset FROM fetch_daily_data_jobs(%s)", (n,))
+            rows = cursor.fetchall()
+            for row in rows:
+                cursor.execute("SELECT update_daily_data(%s, %s)", row)
+
+        self.close()
 
 
     def process_annual_data(self,n: int = 25):
@@ -731,14 +765,14 @@ class IngestClient:
         Process any pending annual data rollups.
         Right now this is just for testing purposes
         """
-        with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-            connection.set_session(autocommit=True)
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT datetime, tz_offset FROM fetch_annual_data_jobs(%s)", (n,))
-                rows = cursor.fetchall()
-                for row in rows:
-                    cursor.execute("SELECT update_annual_data(%s, %s)", row)
-                    connection.commit()
+        connection = self.get_connection(True)
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT datetime, tz_offset FROM fetch_annual_data_jobs(%s)", (n,))
+            rows = cursor.fetchall()
+            for row in rows:
+                cursor.execute("SELECT update_annual_data(%s, %s)", row)
+
+        self.close()
 
 
     def get_metadata(self):
@@ -767,6 +801,12 @@ class IngestClient:
         if hasnew:
             logger.debug(f"get_metadata:hasnew - {self.keys}")
             self.load_data()
+
+
+#################################################################################################
+############################## END OF IngestClient ##############################################
+#################################################################################################
+
 
 def create_staging_table(cursor):
 	# table and batch are used primarily for testing
