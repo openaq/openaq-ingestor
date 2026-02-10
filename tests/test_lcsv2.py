@@ -22,9 +22,13 @@ def get_path(relpath):
     dirname = os.path.dirname(__file__)
     return os.path.join(dirname, relpath);
 
+
 def test_ingest_client():
+    """
+    Very simple data example
+    """
     client = IngestClient();
-    client.load_key(get_path('testdata.json'), 1, str(date.today()))
+    client.load_key(get_path('dataV2.json'), 1, str(date.today()))
     assert len(client.nodes) == 3
     assert len(client.systems) == 0
     assert len(client.sensors) == 0
@@ -34,7 +38,7 @@ def test_ingest_client():
 def test_ingest_client_realtime_measures():
     """
     Actually uses the fetch/load_db method but not much to test in that method
-    because it dumpts it directly into postgres to do the work
+    because it dumps it directly into postgres to do the work
     """
     client = IngestClient();
     client.load_key(get_path('testdata_realtime_measures.ndjson'), 1, str(date.today()))

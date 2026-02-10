@@ -186,12 +186,21 @@ def sample_batch_sns_event():
         ]
     }
 
+@pytest.fixture
+def cloudwatch_event():
+    """Returns mock CloudWatch/EventBridge event."""
+    return {
+        "source": "aws.events",
+        "detail-type": "Scheduled Event",
+        "resources": ["arn:aws:events:us-east-1:123456789012:rule/test-rule"]
+    }
+
 
 @pytest.fixture
 def lambda_context():
     """Mock Lambda context object."""
     class MockContext:
-        function_name = "openaq-ingest-handler"
+        function_name = "openaq-ingest"
         memory_limit_in_mb = 512
         invoked_function_arn = "arn:aws:lambda:us-east-1:123456789012:function:test"
         aws_request_id = "test-request-id-123"

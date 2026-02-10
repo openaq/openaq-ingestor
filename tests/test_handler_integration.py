@@ -2,6 +2,7 @@ import pytest
 from datetime import datetime, timezone
 from ingest.handler import handler, getKeysFromSnsRecord
 import json
+from unittest.mock import patch
 
 
 @pytest.mark.integration
@@ -290,6 +291,89 @@ class TestHandlerDirectS3Events:
         result = db_cursor.fetchone()
         assert result is not None, "Record should be inserted even if S3 object missing"
         assert result[1] is None, "file_size should be NULL for missing object"
+
+
+@pytest.mark.integration
+class TestCronhandlerIntegration:
+    """
+    Integration tests for cronhandler() function.
+
+    NOTE: These tests verify the EventBridge/CloudWatch Events triggered
+    cron processing path that orchestrates metadata, realtime, and pipeline loaders.
+    """
+
+    def test_handler_eventbridge_trigger(
+        self,
+        db_cursor,
+        clean_fetchlogs,
+        lambda_context
+    ):
+        """Test handler routes EventBridge event to cronhandler."""
+        # Arrange
+        eventbridge_event = {
+            "source": "aws.events",
+            "detail-type": "Scheduled Event",
+            "resources": ["arn:aws:events:us-east-1:123456789012:rule/test-rule"]
+        }
+
+        # Mock the loaders to avoid actually processing data
+        with patch('ingest.handler.load_metadata_db', return_value=0) as mock_metadata, \
+             patch('ingest.handler.load_db', return_value=0) as mock_realtime, \
+             patch('ingest.handler.load_measurements_db', return_value=0) as mock_pipeline:
+
+            # Act
+            handler(eventbridge_event, lambda_context)
+
+            # Assert - verify cronhandler was invoked (loaders were called)
+            mock_metadata.assert_called_once()
+            mock_realtime.assert_called_once()
+            mock_pipeline.assert_called_once()
+
+    def test_cronhandler_with_fetchlog_pattern(
+        self,
+        lambda_context
+    ):
+        """Test cronhandler processes specific fetchlogKey pattern."""
+        # Arrange
+        event = {
+            "source": "aws.events",
+            "fetchlogKey": "lcs-etl-pipeline/test%.json",
+            "limit": 5
+        }
+
+        # Mock the pattern loader
+        with patch('ingest.handler.load_measurements_pattern') as mock_pattern:
+            mock_pattern.return_value = {"processed": 3}
+
+            # Act
+            result = handler(event, lambda_context)
+
+            # Assert
+            # Note: handler() calls cronhandler() which returns the result
+            # handler() itself doesn't return anything, so we just verify the call
+            mock_pattern.assert_called_once_with(limit=5, pattern="lcs-etl-pipeline/test%.json")
+
+    def test_cronhandler_respects_pause_setting(
+        self,
+        lambda_context
+    ):
+        """Test cronhandler respects PAUSE_INGESTING setting."""
+        # Arrange
+        event = {
+            "source": "aws.events",
+            "detail-type": "Scheduled Event"
+        }
+
+        # Mock settings to pause ingesting
+        with patch('ingest.handler.settings') as mock_settings, \
+             patch('ingest.handler.load_metadata_db') as mock_metadata:
+            mock_settings.PAUSE_INGESTING = True
+
+            # Act
+            handler(event, lambda_context)
+
+            # Assert - loader should not be called when paused
+            mock_metadata.assert_not_called()
 
 
 @pytest.mark.integration

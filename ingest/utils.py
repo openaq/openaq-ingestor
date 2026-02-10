@@ -517,28 +517,33 @@ def load_fetchlogs(
     batch_uuid = uuid.uuid4().hex
     cur.execute(
         f"""
-        UPDATE fetchlogs
-        SET loaded_datetime = CURRENT_TIMESTAMP
-        , jobs = jobs + 1
-        , batch_uuid = %s
-        FROM (
-          SELECT fetchlogs_id
-          FROM fetchlogs
-          WHERE key~E'{pattern}'
-          AND NOT has_error
-          AND completed_datetime is null
-          AND (
-             loaded_datetime IS NULL
-             OR loaded_datetime < now() - '30min'::interval
-          )
-          ORDER BY last_modified {order} nulls last
-          LIMIT %s
-          FOR UPDATE SKIP LOCKED
-        ) as q
-        WHERE q.fetchlogs_id = fetchlogs.fetchlogs_id
-        RETURNING fetchlogs.fetchlogs_id
-        , fetchlogs.key
-        , fetchlogs.last_modified;
+        WITH updated AS (
+          UPDATE fetchlogs
+          SET loaded_datetime = CURRENT_TIMESTAMP
+          , jobs = jobs + 1
+          , batch_uuid = %s
+          FROM (
+            SELECT fetchlogs_id
+            FROM fetchlogs
+            WHERE key~E'{pattern}'
+            AND NOT has_error
+            AND init_datetime is not null
+            AND completed_datetime is null
+            AND (
+               loaded_datetime IS NULL
+               OR loaded_datetime < now() - '30min'::interval
+            )
+            ORDER BY last_modified {order} nulls last
+            LIMIT %s
+            FOR UPDATE SKIP LOCKED
+          ) as q
+          WHERE q.fetchlogs_id = fetchlogs.fetchlogs_id
+          RETURNING fetchlogs.fetchlogs_id
+          , fetchlogs.key
+          , fetchlogs.last_modified
+        )
+        SELECT * FROM updated
+        ORDER BY last_modified {order} NULLS LAST;
         """,
         (batch_uuid, limit,),
     )
