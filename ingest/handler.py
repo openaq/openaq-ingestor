@@ -10,8 +10,6 @@ import json
 
 from datetime import datetime, timezone
 
-s3c = boto3.client("s3")
-
 logger = logging.getLogger('handler')
 
 logging.basicConfig(
@@ -25,57 +23,85 @@ logging.getLogger('botocore').setLevel(logging.WARNING)
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 
 
-def handler(event, context):
+def handler(event, context, db_connection=None):
+    """
+    Lambda handler for S3 events (SNS-wrapped or direct) and EventBridge cron events.
+
+    Args:
+        event: Lambda event (S3, SNS, or EventBridge)
+        context: Lambda context
+        db_connection: Optional database connection for testing (default: creates new connection)
+    """
     logger.debug(event)
     records = event.get("Records")
     if records is not None:
+        # Create S3 client inside function for testability
+        s3c = boto3.client("s3")
         try:
-            with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-                with connection.cursor() as cursor:
-                    connection.set_session(autocommit=True)
-                    for record in records:
-                        if record.get('EventSource') == 'aws:sns':
-                            keys = getKeysFromSnsRecord(record)
-                        else:
-                            keys = getKeysFromS3Record(record)
+            # Use provided connection or create new one
+            if db_connection:
+                connection = db_connection
+                cursor = connection.cursor()
+                # Don't set autocommit or close connection - test manages it
+                should_close = False
+            else:
+                connection = psycopg2.connect(settings.DATABASE_WRITE_URL)
+                cursor = connection.cursor()
+                connection.set_session(autocommit=True)
+                should_close = True
 
-                        for obj in keys:
-                            bucket = obj['bucket']
-                            key = obj['key']
-                            lov2 = s3c.list_objects_v2(
-                                Bucket=bucket, Prefix=key, MaxKeys=1
+            try:
+                for record in records:
+                    if record.get('EventSource') == 'aws:sns':
+                        keys = getKeysFromSnsRecord(record)
+                    else:
+                        keys = getKeysFromS3Record(record)
+
+                    for obj in keys:
+                        bucket = obj['bucket']
+                        key = obj['key']
+
+                        lov2 = s3c.list_objects_v2(
+                            Bucket=bucket, Prefix=key, MaxKeys=1
+                        )
+
+                        try:
+                            file_size = lov2["Contents"][0]["Size"]
+                            last_modified = lov2["Contents"][0]["LastModified"]
+
+                        except KeyError:
+                            logger.error(f"""
+                            could not get info from obj {lov2}
+                            """)
+                            file_size = None
+                            last_modified = datetime.now().replace(
+                                tzinfo=timezone.utc
                             )
 
-                            try:
-                                file_size = lov2["Contents"][0]["Size"]
-                                last_modified = lov2["Contents"][0]["LastModified"]
-                            except KeyError:
-                                logger.error("""
-                                could not get info from obj
-                                """)
-                                file_size = None
-                                last_modified = datetime.now().replace(
-                                    tzinfo=timezone.utc
-                                )
-
-                            cursor.execute(
-                                """
-                                INSERT INTO fetchlogs (key
-                                , file_size
-                                , last_modified
-                                , init_datetime
-                                )
-                                VALUES(%s, %s, %s, now())
-                                ON CONFLICT (key) DO UPDATE
-                                SET last_modified=EXCLUDED.last_modified,
-                                completed_datetime=NULL
-                                RETURNING *;
-                                """,
-                                (key, file_size, last_modified, ),
+                        cursor.execute(
+                            """
+                            INSERT INTO fetchlogs (key
+                            , file_size
+                            , last_modified
+                            , init_datetime
                             )
-                            row = cursor.fetchone()
+                            VALUES(%s, %s, %s, now())
+                            ON CONFLICT (key) DO UPDATE
+                            SET last_modified=EXCLUDED.last_modified,
+                            completed_datetime=NULL
+                            RETURNING *;
+                            """,
+                            (key, file_size, last_modified, ),
+                        )
+
+                        row = cursor.fetchone()
+                        if not db_connection:  # Only commit if we own the connection
                             connection.commit()
-                            logger.info(f"Inserted: {bucket}:{key}")
+                        logger.info(f"Inserted: {bucket}:{key}")
+            finally:
+                cursor.close()
+                if should_close:
+                    connection.close()
         except Exception as e:
             logger.error(f"Failed file insert: {event}: {e}")
     elif event.get("source") and event["source"] == "aws.events":

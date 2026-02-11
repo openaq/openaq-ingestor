@@ -17,8 +17,8 @@ class TestHandlerSNSEvents:
 
     def test_handler_sns_event_single_file(
         self,
-        db_cursor,
-        clean_fetchlogs,
+        db_connection,
+        #clean_fetchlogs,
         mock_s3_with_object,
         sample_sns_event,
         lambda_context
@@ -27,26 +27,28 @@ class TestHandlerSNSEvents:
         # Arrange
         s3_client, bucket, key, file_size, last_modified = mock_s3_with_object
 
-        # Act
-        handler(sample_sns_event, lambda_context)
+        # Act - pass db_connection to handler
+        handler(sample_sns_event, lambda_context, db_connection=db_connection)
 
         # Assert - verify record inserted
-        db_cursor.execute(
+        cursor = db_connection.cursor()
+        cursor.execute(
             "SELECT key, file_size, init_datetime, last_modified, completed_datetime FROM fetchlogs WHERE key = %s",
             (key,)
         )
-        result = db_cursor.fetchone()
-
+        result = cursor.fetchone()
 
         assert result is not None, f"No fetchlog record found for key: {key}"
-        assert result[0] == key
+        assert result[1] == key
         assert result[1] == file_size
         assert result[2] is not None, f"No init_datetime created for file"
         assert result[3] is not None  # last_modified populated
         assert result[4] is None  # completed_datetime should be NULL
+        cursor.close()
 
     def test_handler_sns_event_batch(
         self,
+        db_connection,
         db_cursor,
         clean_fetchlogs,
         mock_s3,
@@ -62,8 +64,8 @@ class TestHandlerSNSEvents:
             key = f"lcs-etl-pipeline/test{i}.json"
             mock_s3.put_object(Bucket=bucket, Key=key, Body=b'{}')
 
-        # Act
-        handler(sample_batch_sns_event, lambda_context)
+        # Act - pass db_connection to handler
+        handler(sample_batch_sns_event, lambda_context, db_connection=db_connection)
 
         # Assert - verify 5 records inserted
         db_cursor.execute("SELECT COUNT(*) FROM fetchlogs")
@@ -77,6 +79,7 @@ class TestHandlerSNSEvents:
 
     def test_handler_sns_event_multiple_sns_records(
         self,
+        db_connection,
         db_cursor,
         clean_fetchlogs,
         mock_s3,
@@ -106,8 +109,8 @@ class TestHandlerSNSEvents:
                 "Sns": {"Message": json.dumps(s3_message)}
             })
 
-        # Act
-        handler(event, lambda_context)
+        # Act - pass db_connection to handler
+        handler(event, lambda_context, db_connection=db_connection)
 
         # Assert - verify 3 records inserted
         db_cursor.execute("SELECT COUNT(*) FROM fetchlogs")
@@ -116,6 +119,7 @@ class TestHandlerSNSEvents:
 
     def test_handler_duplicate_key_update(
         self,
+        db_connection,
         db_cursor,
         clean_fetchlogs,
         mock_s3_with_object,
@@ -129,10 +133,9 @@ class TestHandlerSNSEvents:
             INSERT INTO fetchlogs (key, last_modified, completed_datetime)
             VALUES (%s, %s, NOW())
         """, (key, datetime(2024, 1, 1, tzinfo=timezone.utc)))
-        db_cursor.connection.commit()
 
-        # Act - process same key again
-        handler(sample_sns_event, lambda_context)
+        # Act - process same key again, pass db_connection to handler
+        handler(sample_sns_event, lambda_context, db_connection=db_connection)
 
         # Assert - verify record updated, not duplicated
         db_cursor.execute("SELECT COUNT(*) FROM fetchlogs WHERE key = %s", (key,))
@@ -150,6 +153,7 @@ class TestHandlerSNSEvents:
 
     def test_handler_missing_s3_object(
         self,
+        db_connection,
         db_cursor,
         clean_fetchlogs,
         mock_s3,  # Empty S3, no object uploaded
@@ -157,8 +161,8 @@ class TestHandlerSNSEvents:
         lambda_context
     ):
         """Test handler handles missing S3 object gracefully."""
-        # Act - process event for non-existent object
-        handler(sample_sns_event, lambda_context)
+        # Act - process event for non-existent object, pass db_connection to handler
+        handler(sample_sns_event, lambda_context, db_connection=db_connection)
 
         # Assert - record still inserted but file_size is NULL
         key = "lcs-etl-pipeline/test.json"
@@ -182,6 +186,7 @@ class TestHandlerDirectS3Events:
 
     def test_handler_direct_s3_event_single_file(
         self,
+        db_connection,
         db_cursor,
         clean_fetchlogs,
         mock_s3_with_object,
@@ -192,8 +197,8 @@ class TestHandlerDirectS3Events:
         # Arrange
         s3_client, bucket, key, file_size, last_modified = mock_s3_with_object
 
-        # Act
-        handler(sample_s3_event, lambda_context)
+        # Act - pass db_connection to handler
+        handler(sample_s3_event, lambda_context, db_connection=db_connection)
 
         # Assert - verify record inserted
         db_cursor.execute(
@@ -210,6 +215,7 @@ class TestHandlerDirectS3Events:
 
     def test_handler_direct_s3_event_batch(
         self,
+        db_connection,
         db_cursor,
         clean_fetchlogs,
         mock_s3,
@@ -223,8 +229,8 @@ class TestHandlerDirectS3Events:
             key = f"lcs-etl-pipeline/test{i}.json"
             mock_s3.put_object(Bucket=bucket, Key=key, Body=b'{}')
 
-        # Act
-        handler(sample_batch_s3_event, lambda_context)
+        # Act - pass db_connection to handler
+        handler(sample_batch_s3_event, lambda_context, db_connection=db_connection)
 
         # Assert - verify 5 records inserted
         db_cursor.execute("SELECT COUNT(*) FROM fetchlogs")
@@ -238,6 +244,7 @@ class TestHandlerDirectS3Events:
 
     def test_handler_direct_s3_duplicate_key(
         self,
+        db_connection,
         db_cursor,
         clean_fetchlogs,
         mock_s3_with_object,
@@ -251,10 +258,9 @@ class TestHandlerDirectS3Events:
             INSERT INTO fetchlogs (key, last_modified, completed_datetime)
             VALUES (%s, %s, NOW())
         """, (key, datetime(2024, 1, 1, tzinfo=timezone.utc)))
-        db_cursor.connection.commit()
 
-        # Act - process same key again via direct S3 event
-        handler(sample_s3_event, lambda_context)
+        # Act - process same key again via direct S3 event, pass db_connection to handler
+        handler(sample_s3_event, lambda_context, db_connection=db_connection)
 
         # Assert - verify record updated, not duplicated
         db_cursor.execute("SELECT COUNT(*) FROM fetchlogs WHERE key = %s", (key,))
@@ -272,6 +278,7 @@ class TestHandlerDirectS3Events:
 
     def test_handler_direct_s3_missing_object(
         self,
+        db_connection,
         db_cursor,
         clean_fetchlogs,
         mock_s3,  # Empty S3, no object uploaded
@@ -279,8 +286,8 @@ class TestHandlerDirectS3Events:
         lambda_context
     ):
         """Test handler handles missing S3 object gracefully (direct S3)."""
-        # Act - process direct S3 event for non-existent object
-        handler(sample_s3_event, lambda_context)
+        # Act - process direct S3 event for non-existent object, pass db_connection to handler
+        handler(sample_s3_event, lambda_context, db_connection=db_connection)
 
         # Assert - record still inserted but file_size is NULL
         key = "lcs-etl-pipeline/test.json"
