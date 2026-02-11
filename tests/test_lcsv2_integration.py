@@ -338,6 +338,40 @@ class TestIngestClientIntegration:
         assert result[0] is not None, "Empty file processing should still update loaded_datetime"
         cursor.close()
 
+
+    def test_ingest_unsupported_file_marks_fetchlog_with_error(
+        self,
+        ingest_context,
+        clean_fetchlogs
+    ):
+        """Test that submit_file_error method works"""
+        # Arrange
+        test_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        test_file = get_test_path('unsupported_data.tab')  # We'll use this but not load much
+        cursor = ingest_context.cursor()
+        cursor.execute("""
+            INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
+            VALUES (%s, %s, %s, NULL, false)
+            RETURNING fetchlogs_id, key, last_modified
+        """, (test_file, test_time, test_time))
+
+        rows = cursor.fetchall()
+        fetchlog_id = rows[0][0]
+
+        client = IngestClient(context=ingest_context)
+        # Load the unsupported file which should result in the fetchlog record updated
+        client.load_keys(rows)
+        # Force dump even with data to test the tracking
+        client.dump(load=True)
+
+        # Assert - fetchlog should be updated
+        cursor.execute("SELECT last_message FROM fetchlogs WHERE fetchlogs_id = %s",
+                      (fetchlog_id,))
+        result = cursor.fetchone()
+        assert 'Not sure how to read file' in result[0]
+        cursor.close()
+
+
     def test_ingest_multiple_fetchlogs_tracked_separately(
         self,
         ingest_context,

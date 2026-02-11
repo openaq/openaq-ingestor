@@ -6,6 +6,7 @@ import logging
 from urllib.parse import unquote_plus
 import gzip
 import uuid
+import csv
 
 import boto3
 import re
@@ -489,6 +490,7 @@ def load_fail(cursor, fetchlogsId, e):
     )
 
 
+
 def load_success(cursor, keys, message: str = 'success'):
     cursor.execute(
         """
@@ -672,3 +674,31 @@ def crawl_lcs():
 
 def crawl_fetch():
     crawl(settings.FETCH_BUCKET, "realtime-gzipped/")
+
+
+def write_csv(cursor, data, table, columns):
+    logger.debug(f"copying {len(data)} rows from table: {table}")
+    if len(data)>0:
+        fields = ",".join(columns)
+        sio = StringIO()
+        writer = csv.DictWriter(sio, columns)
+        writer.writerows(data)
+        sio.seek(0)
+        cursor.copy_expert(
+            f"""
+            copy {table} ({fields}) from stdin with csv;
+            """,
+            sio,
+        )
+        logger.debug(f"copied {cursor.rowcount} rows from table: {table}")
+
+
+
+
+# from lcsV2 but doesnt seem to be used
+# def create_staging_table(cursor):
+# 	# table and batch are used primarily for testing
+# 	cursor.execute(get_query(
+# 		"etl_staging_v2.sql",
+# 		table="TEMP TABLE" if settings.USE_TEMP_TABLES else 'TABLE'
+# 	))

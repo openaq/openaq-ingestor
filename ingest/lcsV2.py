@@ -26,6 +26,8 @@ from .utils import (
     load_fetchlogs,
     get_object,
     get_file,
+    write_csv,
+    load_fail,
 )
 
 app = typer.Typer()
@@ -83,9 +85,6 @@ def to_timestamp(key, data):
             dt = datetime.fromtimestamp(int(dt), timezone.utc)
     else:
         return dt
-        dt = dateparser.parse(dt).replace(tzinfo=timezone.utc)
-
-    return dt.isoformat()
 
 def to_sensorid(key, data):
     param = data.get(key)
@@ -355,7 +354,7 @@ class IngestClient:
             ))
 
             iterator = StringIteratorIO(
-                (to_tsv(line) for line in self.measurements)
+                ("\t".join(map(clean_csv_value, line)) + "\n" for line in self.measurements)
             )
             cursor.copy_expert(
                 """
@@ -420,7 +419,9 @@ class IngestClient:
             try:
                 self.load_key(key, fetchlogs_id, last_modified)
             except Exception as e:
-                submit_file_error(key, e);
+                with self.get_connection(True).cursor() as cursor:
+                    load_fail(cursor, fetchlogs_id, e);
+
 
     def load_key(self, key, fetchlogs_id, last_modified):
         logger.debug(f"Loading key: {fetchlogs_id}//:{key}")
@@ -459,7 +460,7 @@ class IngestClient:
             data = orjson.loads(content)
             self.load(data)
         else:
-            raise Exception('No idea what to do')
+            raise Exception('Not sure how to read file')
 
         # add the key to the table to update
         self.keys.append({"key": key, "last_modified": last_modified, "fetchlogs_id": fetchlogs_id})
@@ -807,203 +808,6 @@ class IngestClient:
 #################################################################################################
 
 
-def create_staging_table(cursor):
-	# table and batch are used primarily for testing
-	cursor.execute(get_query(
-		"etl_staging_v2.sql",
-		table="TEMP TABLE" if settings.USE_TEMP_TABLES else 'TABLE'
-	))
-
-def write_csv(cursor, data, table, columns):
-    logger.debug(f"copying {len(data)} rows from table: {table}")
-    if len(data)>0:
-        fields = ",".join(columns)
-        sio = StringIO()
-        writer = csv.DictWriter(sio, columns)
-        writer.writerows(data)
-        sio.seek(0)
-        cursor.copy_expert(
-            f"""
-            copy {table} ({fields}) from stdin with csv;
-            """,
-            sio,
-        )
-        logger.debug(f"copied {cursor.rowcount} rows from table: {table}")
-
-
-
-
-def load_metadata_db(limit=250, ascending: bool = False):
-    order = 'ASC' if ascending else 'DESC'
-    pattern = 'lcs-etl-pipeline/stations/'
-    rows = load_fetchlogs(pattern, limit, ascending)
-    contents = []
-    for row in rows:
-        logger.debug(row)
-        contents.append(
-            {
-                "Key": unquote_plus(row[1]),
-                "LastModified": row[2],
-                "id": row[0],
-            }
-        )
-    if len(contents) > 0:
-        load_metadata(contents)
-        # data = LCSData(contents)
-        # data.get_metadata()
-    return len(rows)
-
-
-def load_metadata_batch(batch: str):
-    with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-        connection.set_session(autocommit=True)
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT key
-                , last_modified
-                , fetchlogs_id
-                FROM fetchlogs
-                WHERE batch_uuid = %s
-                """,
-                (batch,),
-            )
-            rows = cursor.fetchall()
-            rowcount = cursor.rowcount
-            contents = []
-            for row in rows:
-                contents.append(
-                    {
-                        "Key": unquote_plus(row[0]),
-                        "LastModified": row[1],
-                        "id": row[2],
-                    }
-                )
-
-            for notice in connection.notices:
-                logger.debug(notice.rstrip())
-
-    if len(contents) > 0:
-        load_metadata(contents)
-        # data = LCSData(contents)
-        # data.get_metadata()
-    return rowcount
-
-
-def load_metadata(keys):
-    logger.debug(f'Load metadata: {len(keys)}')
-    data = LCSData(keys)
-    try:
-        data.get_metadata()
-    except Exception as e:
-        ids = ','.join([str(k['id']) for k in keys])
-        logger.error(f'load error: {e} ids: {ids}')
-        raise
-
-
-def get_measurements(key, fetchlogsId):
-    start = time()
-    content = get_object(key)
-    fetch_time = time() - start
-
-    ret = []
-    start = time()
-    for row in csv.reader(content.split("\n")):
-        if len(row) not in [3, 5]:
-            continue
-        if len(row) == 5:
-            try:
-                lon = float(row[3])
-                lat = float(row[4])
-                if not (
-                    lon is None
-                    or lat is None
-                    or lat == ""
-                    or lon == ""
-                    or lon == 0
-                    or lat == 0
-                    or lon < -180
-                    or lon > 180
-                    or lat < -90
-                    or lat > 90
-                ):
-                    row[3] = lon
-                    row[4] = lat
-                else:
-                    row[3] = None
-                    row[4] = None
-            except Exception:
-                row[3] = None
-                row[4] = None
-        else:
-            row.insert(3, None)
-            row.insert(4, None)
-        if row[0] == "" or row[0] is None:
-            continue
-        dt = row[2]
-
-        try:
-            if dt.isnumeric():
-                if len(dt) == 13:
-                    dt = datetime.fromtimestamp(int(dt)/1000.0, timezone.utc)
-                else:
-                    dt = datetime.fromtimestamp(int(dt), timezone.utc)
-                row[2] = dt.isoformat()
-        except Exception:
-            try:
-                dt = dateparser.parse(dt).replace(tzinfo=timezone.utc)
-            except Exception:
-                logger.warning(f"Exception in parsing date for {dt} {Exception}")
-
-        #row[2] = dt.isoformat()
-        # addd the log id for tracing purposes
-        row.insert(5, fetchlogsId)
-        ret.append(row)
-    logger.info("get_measurements:csv: %s; size: %s; rows: %s; fetching: %0.4f; reading: %0.4f", key, len(content)/1000, len(ret), fetch_time, time() - start)
-    return ret
-
-
-def submit_file_error(key, e):
-    """Update the log to reflect the error and prevent a retry"""
-    logger.error(f"{key}: {e}")
-    with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-        connection.set_session(autocommit=True)
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                UPDATE fetchlogs
-                SET completed_datetime = clock_timestamp()
-                , last_message = %s
-                , has_error = 't'
-                WHERE key = %s
-                """,
-                (f"ERROR: {e}", key),
-            )
-
-
-def to_tsv(row):
-    tsv = "\t".join(map(clean_csv_value, row)) + "\n"
-    return tsv
-    return ""
-
-
-def load_measurements_file(fetchlogs_id: int):
-    with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-        connection.set_session(autocommit=True)
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT fetchlogs_id
-                , key
-                FROM fetchlogs
-                WHERE fetchlogs_id = %s
-                LIMIT 1
-                ;
-                """,
-                (fetchlogs_id,),
-            )
-            rows = cursor.fetchall()
-            load_measurements(rows)
 
 def load_measurements_pattern(
         pattern = '^lcs-etl-pipeline/measures/.*\\.(csv|json)',
@@ -1013,23 +817,16 @@ def load_measurements_pattern(
     load_measurements(rows)
     return len(rows)
 
-def load_measurements_key(fetchlogKey: str):
-    with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-        connection.set_session(autocommit=True)
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT fetchlogs_id
-                , key
-                FROM fetchlogs
-                WHERE key = %s
-                LIMIT 1
-                ;
-                """,
-                (fetchlogKey,),
-            )
-            rows = cursor.fetchall()
-            load_measurements(rows)
+
+def load_measurements_db(
+    limit=250,
+    ascending: bool = False,
+    pattern = '^lcs-etl-pipeline/measures/.*\\.(csv|json)'
+    ):
+    rows = load_fetchlogs(pattern, limit, ascending)
+    load_measurements(rows)
+    return len(rows)
+
 
 
 def load_measurements_batch(batch: str):
@@ -1048,15 +845,6 @@ def load_measurements_batch(batch: str):
             rows = cursor.fetchall()
             load_measurements(rows)
 
-
-def load_measurements_db(
-    limit=250,
-    ascending: bool = False,
-    pattern = '^lcs-etl-pipeline/measures/.*\\.(csv|json)'
-    ):
-    rows = load_fetchlogs(pattern, limit, ascending)
-    load_measurements(rows)
-    return len(rows)
 
 
 # Keep seperate from above so we can test rows not from the database
