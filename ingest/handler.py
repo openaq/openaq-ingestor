@@ -3,8 +3,9 @@ import logging
 import psycopg2
 from .settings import settings
 from .context import IngestContext
+from .utils import get_logs_from_pattern, load_fetchlogs
 from .lcs import load_metadata_db
-from .lcsV2 import load_measurements_db, load_measurements_pattern
+from .lcsV2 import IngestClient
 from .fetch import load_db
 from time import time
 import json
@@ -38,7 +39,6 @@ def handler(event, context, ingest_context=None):
     if records is not None:
         # Use provided context or create new one
         ctx = ingest_context or IngestContext()
-        should_close = not ingest_context  # Only close if we created it
 
         try:
             cursor = ctx.cursor()
@@ -90,8 +90,8 @@ def handler(event, context, ingest_context=None):
                         logger.info(f"Inserted: {bucket}:{key}")
             finally:
                 cursor.close()
-                if should_close:
-                    ctx.close()
+                ctx.close()
+
         except Exception as e:
             logger.error(f"Failed file insert: {event}: {e}")
     elif event.get("source") and event["source"] == "aws.events":
@@ -196,3 +196,38 @@ def cronhandler(event, context):
         logger.error(f"load pipeline failed: {e}")
 
     logger.info("done processing: %0.4f seconds", time() - start_time)
+
+
+
+# Keep seperate from above so we can test rows not from the database
+def load_measurements(rows):
+    logger.debug(f"loading {len(rows)} measurements")
+    start_time = time()
+    # get a client object to hold all the data
+    client = IngestClient()
+    # load all the keys
+    client.load_keys(rows)
+    # and finally we can dump it all into the db
+    client.dump()
+    # write to the log
+    logger.info("load_measurements:get: %s keys; %s measurements; %s locations; %0.4f seconds",
+                len(client.keys), len(client.measurements), len(client.nodes), time() - start_time)
+
+
+def load_measurements_pattern(
+        pattern = '^lcs-etl-pipeline/measures/.*\\.(csv|json)',
+        limit=10
+    ):
+    rows = get_logs_from_pattern(pattern, limit)
+    load_measurements(rows)
+    return len(rows)
+
+
+def load_measurements_db(
+    limit=250,
+    ascending: bool = False,
+    pattern = '^lcs-etl-pipeline/measures/.*\\.(csv|json)'
+    ):
+    rows = load_fetchlogs(pattern, limit, ascending)
+    load_measurements(rows)
+    return len(rows)

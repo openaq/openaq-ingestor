@@ -507,6 +507,19 @@ def load_success(cursor, keys, message: str = 'success'):
         ),
     )
 
+def get_fetchlogs_batch(cursor, batch: str):
+    cursor.execute(
+        """
+        SELECT fetchlogs_id
+        , key
+        FROM fetchlogs
+        WHERE batch_uuid = %s
+        """,
+    (batch,),
+    )
+    return cursor.fetchall()
+    #load_measurements(rows)
+
 
 def load_fetchlogs(
         pattern: str,
@@ -691,6 +704,7 @@ def write_csv(cursor, data, table, columns):
             sio,
         )
         logger.debug(f"copied {cursor.rowcount} rows from table: {table}")
+
 
 
 
