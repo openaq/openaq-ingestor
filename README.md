@@ -245,6 +245,8 @@ See `ingest/settings.py` for full configuration options.
 
 ```bash
 poetry run pytest tests/ -v
+## increase the log level
+poetry run pytest tests/ --log-cli-level=DEBUG
 ```
 
 ### Test Categories

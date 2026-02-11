@@ -40,7 +40,6 @@ def db_cursor(db_connection):
 def clean_fetchlogs(db_cursor):
     """Truncates fetchlogs table before test."""
     db_cursor.execute("TRUNCATE TABLE fetchlogs CASCADE")
-    db_cursor.connection.commit()
     yield
     # Cleanup happens via db_connection rollback
 

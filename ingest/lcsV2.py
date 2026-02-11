@@ -159,16 +159,17 @@ class IngestClient:
         if data is not None and isinstance(data, dict):
             self.load(data)
 
-
-    def __del__(self):
-        logger.debug(f'WE ARE DELETING - {self.connection}')
-
     def get_connection(self, autocommit: bool = True):
       """Get existing connection or create new one."""
       if self.connection is None or self.connection.closed:
           self.connection = psycopg2.connect(settings.DATABASE_WRITE_URL)
           self.connection.set_session(autocommit=autocommit)  # default behavior
           self.external_connection = False
+      ## delete any notices that currently exist
+      ## this is to help with debugging and our connection is persisting
+      if len(self.connection.notices)>0:
+          del self.connection.notices[:]
+
       return self.connection
 
     def set_connection(self, connection):
@@ -179,7 +180,6 @@ class IngestClient:
 
     def close(self):
       """Close connection if we created it."""
-      print(f'Closing: {self.connection}')
       if self.connection and not self.external_connection:
           if not self.connection.closed:
             self.connection.close()
@@ -187,7 +187,6 @@ class IngestClient:
 
     def commit(self):
       """Commit connection if we created it."""
-      print(f'Committing: {self.connection}')
       if self.connection and not self.external_connection:
           self.connection.commit()
 
@@ -217,7 +216,6 @@ class IngestClient:
         logger.debug(f"Dumping data from {len(self.keys)} files")
         if len(self.nodes)>0 or len(self.keys)>0:
             self.dump_locations(load)
-        print(f'meas: {self.connection}')
         if len(self.measurements)>0 or len(self.keys)>0:
             self.dump_measurements(load)
 
@@ -230,7 +228,6 @@ class IngestClient:
         connection = self.get_connection(True)
         with connection.cursor() as cursor:
             start_time = time()
-
             cursor.execute(get_query(
                 "temp_locations_dump.sql",
                 table=db_table
@@ -256,6 +253,7 @@ class IngestClient:
                 """
             )
 
+            logger.debug(f"Adding {len(self.nodes)} nodes to staging")
             write_csv(
                 cursor,
                 self.nodes,
@@ -273,6 +271,7 @@ class IngestClient:
                 ],
             )
 
+            logger.debug(f"Adding {len(self.systems)} systems to staging")
             write_csv(
                 cursor,
                 self.systems,
@@ -286,6 +285,7 @@ class IngestClient:
                 ],
             )
 
+            logger.debug(f"Adding {len(self.sensors)} sensors to staging")
             write_csv(
                 cursor,
                 self.sensors,
@@ -303,6 +303,7 @@ class IngestClient:
                 ],
             )
 
+            logger.debug(f"Adding {len(self.flags)} flags to staging")
             write_csv(
                 cursor,
                 self.flags,
@@ -324,7 +325,7 @@ class IngestClient:
                 cursor.execute(query)
 
             for notice in connection.notices:
-                logger.debug(notice)
+                logger.debug(f"etl_process_nodes {notice.rstrip()}")
 
             cursor.execute(
                 """
@@ -335,9 +336,7 @@ class IngestClient:
                 """
             )
 
-            logger.info("dump_locations: locations: %s; time: %0.4f", len(self.nodes), time() - start_time)
-            for notice in connection.notices:
-                logger.debug(notice)
+            logger.info("dump_locations: locations: %s; time: %0.4f, %s fetchlog(s)", len(self.nodes), time() - start_time, cursor.rowcount)
 
         self.close()
 
@@ -374,7 +373,8 @@ class IngestClient:
                     cursor.execute(query)
                     logger.info("dump_measurements: measurements: %s; time: %0.4f", len(self.measurements), time() - start_time)
                     for notice in connection.notices:
-                        logger.debug(notice)
+                        logger.debug(f"etl_process_measurements {notice.rstrip()}")
+
 
                 except Exception as err:
                     logger.error(err)
@@ -507,7 +507,7 @@ class IngestClient:
 
             sensor["ingest_id"] = id
 
-            logger.debug(f'Adding sensor {s}')
+            logger.debug(f"Adding sensor {s.get('key')}")
             for key, value in s.items():
                 key = str.replace(key, "sensor_", "")
                 if key == "flags":
@@ -816,19 +816,20 @@ def create_staging_table(cursor):
 	))
 
 def write_csv(cursor, data, table, columns):
-    logger.debug(f"table: {table}")
-    fields = ",".join(columns)
-    sio = StringIO()
-    writer = csv.DictWriter(sio, columns)
-    writer.writerows(data)
-    sio.seek(0)
-    cursor.copy_expert(
-        f"""
-        copy {table} ({fields}) from stdin with csv;
-        """,
-        sio,
-    )
-    logger.debug(f"table: {table}; cursor rowcount: {cursor.rowcount}")
+    logger.debug(f"copying {len(data)} rows from table: {table}")
+    if len(data)>0:
+        fields = ",".join(columns)
+        sio = StringIO()
+        writer = csv.DictWriter(sio, columns)
+        writer.writerows(data)
+        sio.seek(0)
+        cursor.copy_expert(
+            f"""
+            copy {table} ({fields}) from stdin with csv;
+            """,
+            sio,
+        )
+        logger.debug(f"copied {cursor.rowcount} rows from table: {table}")
 
 
 
@@ -894,8 +895,10 @@ def load_metadata_batch(batch: str):
                         "id": row[2],
                     }
                 )
+
             for notice in connection.notices:
-                logger.debug(notice)
+                logger.debug(notice.rstrip())
+
     if len(contents) > 0:
         load_metadata(contents)
         # data = LCSData(contents)
