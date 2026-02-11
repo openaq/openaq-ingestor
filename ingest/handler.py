@@ -2,6 +2,7 @@ import boto3
 import logging
 import psycopg2
 from .settings import settings
+from .context import IngestContext
 from .lcs import load_metadata_db
 from .lcsV2 import load_measurements_db, load_measurements_pattern
 from .fetch import load_db
@@ -23,32 +24,24 @@ logging.getLogger('botocore').setLevel(logging.WARNING)
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 
 
-def handler(event, context, db_connection=None):
+def handler(event, context, ingest_context=None):
     """
     Lambda handler for S3 events (SNS-wrapped or direct) and EventBridge cron events.
 
     Args:
         event: Lambda event (S3, SNS, or EventBridge)
         context: Lambda context
-        db_connection: Optional database connection for testing (default: creates new connection)
+        ingest_context: Optional IngestContext for testing (default: creates new context)
     """
     logger.debug(event)
     records = event.get("Records")
     if records is not None:
-        # Create S3 client inside function for testability
-        s3c = boto3.client("s3")
+        # Use provided context or create new one
+        ctx = ingest_context or IngestContext()
+        should_close = not ingest_context  # Only close if we created it
+
         try:
-            # Use provided connection or create new one
-            if db_connection:
-                connection = db_connection
-                cursor = connection.cursor()
-                # Don't set autocommit or close connection - test manages it
-                should_close = False
-            else:
-                connection = psycopg2.connect(settings.DATABASE_WRITE_URL)
-                cursor = connection.cursor()
-                connection.set_session(autocommit=True)
-                should_close = True
+            cursor = ctx.cursor()
 
             try:
                 for record in records:
@@ -61,7 +54,8 @@ def handler(event, context, db_connection=None):
                         bucket = obj['bucket']
                         key = obj['key']
 
-                        lov2 = s3c.list_objects_v2(
+                        # Use ctx.s3 instead of creating client
+                        lov2 = ctx.s3.list_objects_v2(
                             Bucket=bucket, Prefix=key, MaxKeys=1
                         )
 
@@ -70,9 +64,7 @@ def handler(event, context, db_connection=None):
                             last_modified = lov2["Contents"][0]["LastModified"]
 
                         except KeyError:
-                            logger.error(f"""
-                            could not get info from obj {lov2}
-                            """)
+                            logger.error(f"could not get info from obj {lov2}")
                             file_size = None
                             last_modified = datetime.now().replace(
                                 tzinfo=timezone.utc
@@ -95,13 +87,11 @@ def handler(event, context, db_connection=None):
                         )
 
                         row = cursor.fetchone()
-                        if not db_connection:  # Only commit if we own the connection
-                            connection.commit()
                         logger.info(f"Inserted: {bucket}:{key}")
             finally:
                 cursor.close()
                 if should_close:
-                    connection.close()
+                    ctx.close()
         except Exception as e:
             logger.error(f"Failed file insert: {event}: {e}")
     elif event.get("source") and event["source"] == "aws.events":

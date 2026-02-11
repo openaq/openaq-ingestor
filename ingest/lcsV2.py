@@ -16,6 +16,7 @@ import psycopg2
 import typer
 from io import StringIO
 from .settings import settings
+from .context import IngestContext
 from .utils import (
     get_query,
     clean_csv_value,
@@ -26,9 +27,6 @@ from .utils import (
     get_object,
     get_file,
 )
-
-s3 = boto3.resource("s3")
-s3c = boto3.client("s3")
 
 app = typer.Typer()
 dir_path = os.path.dirname(os.path.realpath(__file__))
@@ -103,7 +101,7 @@ def to_nodeid(key, data):
 
 class IngestClient:
     def __init__(
-        self, key=None, fetchlogs_id=None, data=None
+        self, key=None, fetchlogs_id=None, data=None, context=None
     ):
         self.key = key
         self.fetchlogs_id = fetchlogs_id
@@ -119,8 +117,15 @@ class IngestClient:
         self.measurements = []
         self.matching_method = 'ingest-id'
         self.source = None
-        self.connection = None
-        self.external_connection = False  # track if we manage it
+
+        # Resource management via context
+        if context:
+            self.context = context
+            self._owns_context = False
+        else:
+            self.context = IngestContext()
+            self._owns_context = True
+
         self.node_map = {
             "fetchlogs_id": {},
             "site_name": { "col":"site_name" },
@@ -160,35 +165,29 @@ class IngestClient:
             self.load(data)
 
     def get_connection(self, autocommit: bool = True):
-      """Get existing connection or create new one."""
-      if self.connection is None or self.connection.closed:
-          self.connection = psycopg2.connect(settings.DATABASE_WRITE_URL)
-          self.connection.set_session(autocommit=autocommit)  # default behavior
-          self.external_connection = False
-      ## delete any notices that currently exist
-      ## this is to help with debugging and our connection is persisting
-      if len(self.connection.notices)>0:
-          del self.connection.notices[:]
+      """Get database connection via context."""
+      return self.context.get_connection(autocommit=autocommit)
 
-      return self.connection
+    # def set_connection(self, connection):
+    #   """Set external connection (for testing backward compatibility)."""
+    #   self.context = IngestContext(connection=connection)
+    #   self._owns_context = False
+    #   return self
 
-    def set_connection(self, connection):
-      """Use an externally-managed connection (for testing)."""
-      self.connection = connection
-      self.external_connection = True
-      return self
+    @property
+    def connection(self):
+      """Get connection from context."""
+      return self.context._connection
 
     def close(self):
-      """Close connection if we created it."""
-      if self.connection and not self.external_connection:
-          if not self.connection.closed:
-            self.connection.close()
-          self.connection = None
+      """Close context if we own it."""
+      if self._owns_context:
+          self.context.close()
 
     def commit(self):
-      """Commit connection if we created it."""
-      if self.connection and not self.external_connection:
-          self.connection.commit()
+      """Commit context if we own it."""
+      if self._owns_context:
+          self.context.commit()
 
 
     def process(self, key, data, mp):
@@ -832,21 +831,6 @@ def write_csv(cursor, data, table, columns):
         logger.debug(f"copied {cursor.rowcount} rows from table: {table}")
 
 
-
-
-def load_metadata_bucketscan(count=100):
-    paginator = s3c.get_paginator("list_objects_v2")
-    for page in paginator.paginate(
-        Bucket=FETCH_BUCKET,
-        Prefix="lcs-etl-pipeline/stations",
-        PaginationConfig={"PageSize": count},
-    ):
-        try:
-            contents = page["Contents"]
-            data = LCSData(contents)
-            data.get_metadata()
-        except KeyError:
-            break
 
 
 def load_metadata_db(limit=250, ascending: bool = False):
