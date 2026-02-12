@@ -141,7 +141,7 @@ def get_query(file, **params):
 
 
 
-def get_logs_from_pattern(pattern: str, limit: int = 250):
+def get_logs_from_pattern(pattern: str, limit: int = 250, connection=None):
     r"""Retrieve fetchlog records matching a regex pattern.
 
     Queries the fetchlogs table using PostgreSQL regex matching (~*) to find
@@ -168,26 +168,27 @@ def get_logs_from_pattern(pattern: str, limit: int = 250):
     Example:
         >>> rows = get_logs_from_pattern(r'^lcs-etl-pipeline/measures/.*\.csv', limit=10)
     """
-    with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-        connection.set_session(autocommit=True)
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT fetchlogs_id
-                , key
-                , init_datetime
-                , loaded_datetime
-                , completed_datetime
-                , last_message
-                , last_modified
-                FROM fetchlogs
-                WHERE key~*%s
-                LIMIT %s
-                """,
-                (pattern, limit,),
+    if connection is None:
+        rs = Resources()
+        connection = rs.get_connection(autocommit=True)
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+              SELECT fetchlogs_id
+              , key
+              , init_datetime
+              , loaded_datetime
+              , completed_datetime
+              , last_message
+              , last_modified
+              FROM fetchlogs
+              WHERE key~*%s
+              LIMIT %s
+              """,
+              (pattern, limit,),
             )
-            rows = cursor.fetchall()
-            return rows
+        return cursor.fetchall()
 
 
 def fix_units(value: str):
@@ -546,6 +547,7 @@ def load_fetchlogs(
         pattern: str,
         limit: int = 250,
         ascending: bool = False,
+        connection=None
 ):
     r"""Load and lock a batch of fetchlogs ready for processing.
 
@@ -589,47 +591,47 @@ def load_fetchlogs(
         ...     process_file(key)
     """
     order = 'ASC' if ascending else 'DESC'
-    conn = psycopg2.connect(settings.DATABASE_WRITE_URL)
-    cur = conn.cursor()
+    if connection is None:
+        rs = Resources()
+        connection = rs.get_connection(autocommit=True)
+
     batch_uuid = uuid.uuid4().hex
-    cur.execute(
-        f"""
-        WITH updated AS (
-          UPDATE fetchlogs
-          SET loaded_datetime = CURRENT_TIMESTAMP
-          , jobs = jobs + 1
-          , batch_uuid = %s
-          FROM (
-            SELECT fetchlogs_id
-            FROM fetchlogs
-            WHERE key~E'{pattern}'
-            AND NOT has_error
-            AND init_datetime is not null
-            AND completed_datetime is null
-            AND (
-               loaded_datetime IS NULL
-               OR loaded_datetime < now() - '30min'::interval
+    with connection.cursor() as cursor:
+        cursor.execute(
+            f"""
+            WITH updated AS (
+              UPDATE fetchlogs
+              SET loaded_datetime = CURRENT_TIMESTAMP
+              , jobs = jobs + 1
+              , batch_uuid = %s
+              FROM (
+                SELECT fetchlogs_id
+                FROM fetchlogs
+                WHERE key~E'{pattern}'
+                AND NOT has_error
+                AND init_datetime is not null
+                AND completed_datetime is null
+                AND (
+                   loaded_datetime IS NULL
+                   OR loaded_datetime < now() - '30min'::interval
+                )
+                ORDER BY last_modified {order} nulls last
+                LIMIT %s
+                FOR UPDATE SKIP LOCKED
+              ) as q
+              WHERE q.fetchlogs_id = fetchlogs.fetchlogs_id
+              RETURNING fetchlogs.fetchlogs_id
+              , fetchlogs.key
+              , fetchlogs.last_modified
             )
-            ORDER BY last_modified {order} nulls last
-            LIMIT %s
-            FOR UPDATE SKIP LOCKED
-          ) as q
-          WHERE q.fetchlogs_id = fetchlogs.fetchlogs_id
-          RETURNING fetchlogs.fetchlogs_id
-          , fetchlogs.key
-          , fetchlogs.last_modified
+            SELECT * FROM updated
+            ORDER BY last_modified {order} NULLS LAST;
+            """,
+            (batch_uuid, limit,),
         )
-        SELECT * FROM updated
-        ORDER BY last_modified {order} NULLS LAST;
-        """,
-        (batch_uuid, limit,),
-    )
-    rows = cur.fetchall()
-    logger.debug(f'Loaded {len(rows)} from fetchlogs using {pattern}/{order}')
-    conn.commit()
-    cur.close()
-    conn.close()
-    return rows
+        rows = cursor.fetchall()
+        logger.debug(f'Loaded {len(rows)} from fetchlogs using {pattern}/{order}')
+        return rows
 
 
 def write_csv(cursor, data, table, columns):

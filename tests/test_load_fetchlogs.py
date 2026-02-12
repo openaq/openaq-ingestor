@@ -21,24 +21,24 @@ class TestLoadFetchlogs:
 
     def test_load_fetchlogs_basic_pattern_match(
         self,
-        db_cursor,
+        db_connection,
         clean_fetchlogs
     ):
         """Test load_fetchlogs returns records matching pattern."""
         # Arrange - insert test records
         test_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        db_cursor.execute("""
-            INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
-            VALUES
-                ('lcs-etl-pipeline/measures/test1.json', %s, %s, NULL, false),
-                ('lcs-etl-pipeline/measures/test2.json', %s, %s, NULL, false),
-                ('lcs-etl-pipeline/station/test3.json', %s, %s, NULL, false),
-                ('realtime-gzipped/test4.json', %s, %s, NULL, false)
-        """, (test_time, test_time, test_time, test_time, test_time, test_time, test_time, test_time))
-        db_cursor.connection.commit()
+        with db_connection.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
+                VALUES
+                    ('lcs-etl-pipeline/measures/test1.json', %s, %s, NULL, false),
+                    ('lcs-etl-pipeline/measures/test2.json', %s, %s, NULL, false),
+                    ('lcs-etl-pipeline/station/test3.json', %s, %s, NULL, false),
+                    ('realtime-gzipped/test4.json', %s, %s, NULL, false)
+            """, (test_time, test_time, test_time, test_time, test_time, test_time, test_time, test_time))
 
         # Act - search for lcs-etl-pipeline/measures pattern
-        rows = load_fetchlogs(pattern='^lcs-etl-pipeline/measures', limit=10)
+        rows = load_fetchlogs(pattern='^lcs-etl-pipeline/measures', limit=10, connection=db_connection)
 
         # Assert
         assert len(rows) == 2, f"Expected 2 records, got {len(rows)}"
@@ -48,28 +48,28 @@ class TestLoadFetchlogs:
 
     def test_load_fetchlogs_respects_limit(
         self,
-        db_cursor,
+        db_connection,
         clean_fetchlogs
     ):
         """Test load_fetchlogs respects limit parameter."""
         # Arrange - insert 10 records
         test_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        for i in range(10):
-            db_cursor.execute("""
-                INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
-                VALUES (%s, %s, %s, NULL, false)
-            """, (f'lcs-etl-pipeline/test{i}.json', test_time, test_time))
-        db_cursor.connection.commit()
+        with db_connection.cursor() as cursor:
+            for i in range(10):
+                cursor.execute("""
+                    INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
+                    VALUES (%s, %s, %s, NULL, false)
+                """, (f'lcs-etl-pipeline/test{i}.json', test_time, test_time))
 
         # Act - request only 3 records
-        rows = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=3)
+        rows = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=3, connection=db_connection)
 
         # Assert
         assert len(rows) == 3, f"Expected 3 records with limit=3, got {len(rows)}"
 
     def test_load_fetchlogs_ascending_order(
         self,
-        db_cursor,
+        db_connection,
         clean_fetchlogs
     ):
         """Test load_fetchlogs returns records in ascending order by last_modified."""
@@ -79,15 +79,15 @@ class TestLoadFetchlogs:
             datetime(2024, 1, 2, 12, 0, 0, tzinfo=timezone.utc),
             datetime(2024, 1, 3, 12, 0, 0, tzinfo=timezone.utc),
         ]
-        for i, time in enumerate(times):
-            db_cursor.execute("""
-                INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
-                VALUES (%s, %s, %s, NULL, false)
-            """, (f'lcs-etl-pipeline/test{i}.json', time, time))
-        db_cursor.connection.commit()
+        with db_connection.cursor() as cursor:
+            for i, time in enumerate(times):
+                cursor.execute("""
+                    INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
+                    VALUES (%s, %s, %s, NULL, false)
+                """, (f'lcs-etl-pipeline/test{i}.json', time, time))
 
         # Act - request in ascending order
-        rows = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10, ascending=True)
+        rows = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10, connection=db_connection, ascending=True)
 
         # Assert - should be ordered oldest to newest
         assert len(rows) == 3
@@ -98,7 +98,7 @@ class TestLoadFetchlogs:
 
     def test_load_fetchlogs_descending_order(
         self,
-        db_cursor,
+        db_connection,
         clean_fetchlogs
     ):
         """Test load_fetchlogs returns records in descending order by last_modified."""
@@ -108,15 +108,15 @@ class TestLoadFetchlogs:
             datetime(2024, 1, 2, 12, 0, 0, tzinfo=timezone.utc),
             datetime(2024, 1, 3, 12, 0, 0, tzinfo=timezone.utc),
         ]
-        for i, time in enumerate(times):
-            db_cursor.execute("""
-                INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
-                VALUES (%s, %s, %s, NULL, false)
-            """, (f'lcs-etl-pipeline/test{i}.json', time, time))
-        db_cursor.connection.commit()
+        with db_connection.cursor() as cursor:
+            for i, time in enumerate(times):
+                cursor.execute("""
+                    INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
+                    VALUES (%s, %s, %s, NULL, false)
+                """, (f'lcs-etl-pipeline/test{i}.json', time, time))
 
         # Act - request in descending order (default)
-        rows = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10, ascending=False)
+        rows = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10, connection=db_connection, ascending=False)
 
         # Assert - should be ordered newest to oldest
         assert len(rows) == 3
@@ -127,23 +127,23 @@ class TestLoadFetchlogs:
 
     def test_load_fetchlogs_skips_completed(
         self,
-        db_cursor,
+        db_connection,
         clean_fetchlogs
     ):
         """Test load_fetchlogs skips records with completed_datetime set."""
         # Arrange
         test_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        db_cursor.execute("""
-            INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
-            VALUES
-                ('lcs-etl-pipeline/test1.json', %s, %s, NULL, false),
-                ('lcs-etl-pipeline/test2.json', %s, %s, NOW(), false),
-                ('lcs-etl-pipeline/test3.json', %s, %s, NULL, false)
-        """, (test_time, test_time, test_time, test_time, test_time, test_time))
-        db_cursor.connection.commit()
+        with db_connection.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
+                VALUES
+                    ('lcs-etl-pipeline/test1.json', %s, %s, NULL, false),
+                    ('lcs-etl-pipeline/test2.json', %s, %s, NOW(), false),
+                    ('lcs-etl-pipeline/test3.json', %s, %s, NULL, false)
+            """, (test_time, test_time, test_time, test_time, test_time, test_time))
 
         # Act
-        rows = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10)
+        rows = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10, connection=db_connection)
 
         # Assert - should only return test1 and test3 (not test2 with completed_datetime)
         assert len(rows) == 2
@@ -154,23 +154,23 @@ class TestLoadFetchlogs:
 
     def test_load_fetchlogs_skips_errors(
         self,
-        db_cursor,
+        db_connection,
         clean_fetchlogs
     ):
         """Test load_fetchlogs skips records with has_error=true."""
         # Arrange
         test_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        db_cursor.execute("""
-            INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
-            VALUES
-                ('lcs-etl-pipeline/test1.json', %s, %s, NULL, false),
-                ('lcs-etl-pipeline/test2.json', %s, %s, NULL, true),
-                ('lcs-etl-pipeline/test3.json', %s, %s, NULL, false)
-        """, (test_time, test_time, test_time, test_time, test_time, test_time))
-        db_cursor.connection.commit()
+        with db_connection.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
+                VALUES
+                    ('lcs-etl-pipeline/test1.json', %s, %s, NULL, false),
+                    ('lcs-etl-pipeline/test2.json', %s, %s, NULL, true),
+                    ('lcs-etl-pipeline/test3.json', %s, %s, NULL, false)
+            """, (test_time, test_time, test_time, test_time, test_time, test_time))
 
         # Act
-        rows = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10)
+        rows = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10, connection=db_connection)
 
         # Assert - should only return test1 and test3 (not test2 with has_error=true)
         assert len(rows) == 2
@@ -181,23 +181,23 @@ class TestLoadFetchlogs:
 
     def test_load_fetchlogs_skips_null_init_datetime(
         self,
-        db_cursor,
+        db_connection,
         clean_fetchlogs
     ):
         """Test load_fetchlogs skips records with NULL init_datetime."""
         # Arrange
         test_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        db_cursor.execute("""
-            INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
-            VALUES
-                ('lcs-etl-pipeline/test1.json', %s, %s, NULL, false),
-                ('lcs-etl-pipeline/test2.json', %s, NULL, NULL, false),
-                ('lcs-etl-pipeline/test3.json', %s, %s, NULL, false)
-        """, (test_time, test_time, test_time, test_time, test_time))
-        db_cursor.connection.commit()
+        with db_connection.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
+                VALUES
+                    ('lcs-etl-pipeline/test1.json', %s, %s, NULL, false),
+                    ('lcs-etl-pipeline/test2.json', %s, NULL, NULL, false),
+                    ('lcs-etl-pipeline/test3.json', %s, %s, NULL, false)
+            """, (test_time, test_time, test_time, test_time, test_time))
 
         # Act
-        rows = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10)
+        rows = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10, connection=db_connection)
 
         # Assert - should only return test1 and test3 (not test2 with NULL init_datetime)
         assert len(rows) == 2
@@ -208,7 +208,7 @@ class TestLoadFetchlogs:
 
     def test_load_fetchlogs_skips_recently_loaded(
         self,
-        db_cursor,
+        db_connection,
         clean_fetchlogs
     ):
         """Test load_fetchlogs skips records loaded within last 30 minutes."""
@@ -219,17 +219,17 @@ class TestLoadFetchlogs:
         # Record loaded 45 minutes ago (should be included)
         old_load = datetime.now(timezone.utc) - timedelta(minutes=45)
 
-        db_cursor.execute("""
-            INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error, loaded_datetime)
-            VALUES
-                ('lcs-etl-pipeline/test1.json', %s, %s, NULL, false, NULL),
-                ('lcs-etl-pipeline/test2.json', %s, %s, NULL, false, %s),
-                ('lcs-etl-pipeline/test3.json', %s, %s, NULL, false, %s)
-        """, (test_time, test_time, test_time, test_time, recent_load, test_time, test_time, old_load))
-        db_cursor.connection.commit()
+        with db_connection.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error, loaded_datetime)
+                VALUES
+                    ('lcs-etl-pipeline/test1.json', %s, %s, NULL, false, NULL),
+                    ('lcs-etl-pipeline/test2.json', %s, %s, NULL, false, %s),
+                    ('lcs-etl-pipeline/test3.json', %s, %s, NULL, false, %s)
+            """, (test_time, test_time, test_time, test_time, recent_load, test_time, test_time, old_load))
 
         # Act
-        rows = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10)
+        rows = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10, connection=db_connection)
 
         # Assert - should return test1 (never loaded) and test3 (loaded >30min ago)
         # but not test2 (loaded <30min ago)
@@ -240,135 +240,134 @@ class TestLoadFetchlogs:
 
     def test_load_fetchlogs_updates_loaded_datetime(
         self,
-        db_cursor,
+        db_connection,
         clean_fetchlogs
     ):
         """Test load_fetchlogs updates loaded_datetime when selecting records."""
         # Arrange
         test_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        db_cursor.execute("""
-            INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error, loaded_datetime)
-            VALUES ('lcs-etl-pipeline/test1.json', %s, %s, NULL, false, NULL)
-        """, (test_time, test_time))
-        db_cursor.connection.commit()
+        with db_connection.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error, loaded_datetime)
+                VALUES ('lcs-etl-pipeline/test1.json', %s, %s, NULL, false, NULL)
+            """, (test_time, test_time))
 
-        # Get initial state
-        db_cursor.execute("SELECT loaded_datetime FROM fetchlogs WHERE key = %s",
-                         ('lcs-etl-pipeline/test1.json',))
-        initial_loaded = db_cursor.fetchone()[0]
-        assert initial_loaded is None
+            # Get initial state
+            cursor.execute("SELECT loaded_datetime FROM fetchlogs WHERE key = %s",
+                             ('lcs-etl-pipeline/test1.json',))
+            initial_loaded = cursor.fetchone()[0]
+            assert initial_loaded is None
 
-        # Act
-        rows = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10)
+            # Act
+            rows = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10, connection=db_connection)
 
-        # Assert - loaded_datetime should now be set
-        db_cursor.execute("SELECT loaded_datetime FROM fetchlogs WHERE key = %s",
-                         ('lcs-etl-pipeline/test1.json',))
-        updated_loaded = db_cursor.fetchone()[0]
-        assert updated_loaded is not None
-        assert updated_loaded > test_time
+            # Assert - loaded_datetime should now be set
+            cursor.execute("SELECT loaded_datetime FROM fetchlogs WHERE key = %s",
+                             ('lcs-etl-pipeline/test1.json',))
+            updated_loaded = cursor.fetchone()[0]
+            assert updated_loaded is not None
+            assert updated_loaded > test_time
 
     def test_load_fetchlogs_increments_jobs_counter(
         self,
-        db_cursor,
+        db_connection,
         clean_fetchlogs
     ):
         """Test load_fetchlogs increments jobs counter."""
         # Arrange
         test_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        db_cursor.execute("""
-            INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error, jobs)
-            VALUES ('lcs-etl-pipeline/test1.json', %s, %s, NULL, false, 0)
-        """, (test_time, test_time))
-        db_cursor.connection.commit()
+        with db_connection.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error, jobs)
+                VALUES ('lcs-etl-pipeline/test1.json', %s, %s, NULL, false, 0)
+            """, (test_time, test_time))
 
-        # Act - load the record twice
-        load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10)
+            # Act - load the record twice
+            load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10, connection=db_connection)
 
-        # Wait a bit and load again (simulate retry after 30min)
-        db_cursor.execute("""
-            UPDATE fetchlogs
-            SET loaded_datetime = NOW() - INTERVAL '45 minutes'
-            WHERE key = 'lcs-etl-pipeline/test1.json'
-        """)
-        db_cursor.connection.commit()
+            # Wait a bit and load again (simulate retry after 30min)
+            cursor.execute("""
+                UPDATE fetchlogs
+                SET loaded_datetime = NOW() - INTERVAL '45 minutes'
+                WHERE key = 'lcs-etl-pipeline/test1.json'
+            """)
 
-        load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10)
+            load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10, connection=db_connection)
 
-        # Assert - jobs should be incremented to 2
-        db_cursor.execute("SELECT jobs FROM fetchlogs WHERE key = %s",
-                         ('lcs-etl-pipeline/test1.json',))
-        jobs_count = db_cursor.fetchone()[0]
-        assert jobs_count == 2
+            # Assert - jobs should be incremented to 2
+            cursor.execute("SELECT jobs FROM fetchlogs WHERE key = %s",
+                             ('lcs-etl-pipeline/test1.json',))
+            jobs_count = cursor.fetchone()[0]
+            assert jobs_count == 2
 
     def test_load_fetchlogs_sets_batch_uuid(
         self,
-        db_cursor,
+        db_connection,
         clean_fetchlogs
     ):
         """Test load_fetchlogs sets batch_uuid for tracking."""
         # Arrange
         test_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        db_cursor.execute("""
-            INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
-            VALUES
-                ('lcs-etl-pipeline/test1.json', %s, %s, NULL, false),
-                ('lcs-etl-pipeline/test2.json', %s, %s, NULL, false)
-        """, (test_time, test_time, test_time, test_time))
-        db_cursor.connection.commit()
+        with db_connection.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
+                VALUES
+                    ('lcs-etl-pipeline/test1.json', %s, %s, NULL, false),
+                    ('lcs-etl-pipeline/test2.json', %s, %s, NULL, false)
+            """, (test_time, test_time, test_time, test_time))
 
-        # Act
-        load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10)
+            # Act
+            load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10, connection=db_connection)
 
-        # Assert - both records should have same non-null batch_uuid
-        db_cursor.execute("""
-            SELECT DISTINCT batch_uuid
-            FROM fetchlogs
-            WHERE key LIKE 'lcs-etl-pipeline%'
-        """)
-        uuids = db_cursor.fetchall()
-        assert len(uuids) == 1
-        assert uuids[0][0] is not None
+            # Assert - both records should have same non-null batch_uuid
+            cursor.execute("""
+                SELECT DISTINCT batch_uuid
+                FROM fetchlogs
+                WHERE key LIKE 'lcs-etl-pipeline%'
+            """)
+            uuids = cursor.fetchall()
+            assert len(uuids) == 1
+            assert uuids[0][0] is not None
 
     def test_load_fetchlogs_empty_result(
         self,
-        db_cursor,
+        db_connection,
         clean_fetchlogs
     ):
         """Test load_fetchlogs returns empty list when no matching records."""
         # Arrange - insert records with different pattern
         test_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        db_cursor.execute("""
-            INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
-            VALUES ('realtime-gzipped/test1.json', %s, %s, NULL, false)
-        """, (test_time, test_time))
-        db_cursor.connection.commit()
+        with db_connection.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
+                VALUES ('realtime-gzipped/test1.json', %s, %s, NULL, false)
+            """, (test_time, test_time))
 
-        # Act - search for non-existent pattern
-        rows = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10)
+            # Act - search for non-existent pattern
+            rows = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10, connection=db_connection)
 
-        # Assert
-        assert len(rows) == 0
+            # Assert
+            assert len(rows) == 0
 
     def test_load_fetchlogs_null_last_modified(
         self,
-        db_cursor,
+        db_connection,
         clean_fetchlogs
     ):
         """Test load_fetchlogs handles records with NULL last_modified (nulls last)."""
         # Arrange - insert records with and without last_modified
         test_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        db_cursor.execute("""
-            INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
-            VALUES
-                ('lcs-etl-pipeline/test1.json', %s, %s, NULL, false),
-                ('lcs-etl-pipeline/test2.json', NULL, %s, NULL, false),
-                ('lcs-etl-pipeline/test3.json', %s, %s, NULL, false)
-        """, (test_time, test_time, test_time, test_time, test_time))
-        db_cursor.connection.commit()
+        with db_connection.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
+                VALUES
+                    ('lcs-etl-pipeline/test1.json', %s, %s, NULL, false),
+                    ('lcs-etl-pipeline/test2.json', NULL, %s, NULL, false),
+                    ('lcs-etl-pipeline/test3.json', %s, %s, NULL, false)
+            """, (test_time, test_time, test_time, test_time, test_time))
 
         # Act - get in descending order
-        rows = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10, ascending=False)
+        rows = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10, connection=db_connection, ascending=False)
 
         # Assert - all 3 should be returned, nulls should be last
         assert len(rows) == 3
@@ -378,23 +377,23 @@ class TestLoadFetchlogs:
 
     def test_load_fetchlogs_concurrent_safety(
         self,
-        db_cursor,
+        db_connection,
         clean_fetchlogs
     ):
         """Test load_fetchlogs uses FOR UPDATE SKIP LOCKED for concurrent safety."""
         # Arrange
         test_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        db_cursor.execute("""
-            INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
-            VALUES ('lcs-etl-pipeline/test1.json', %s, %s, NULL, false)
-        """, (test_time, test_time))
-        db_cursor.connection.commit()
+        with db_connection.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
+                VALUES ('lcs-etl-pipeline/test1.json', %s, %s, NULL, false)
+            """, (test_time, test_time))
 
         # Act - First load should get the record
-        rows1 = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10)
+        rows1 = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10, connection=db_connection)
 
         # Second load immediately after should NOT get it (loaded_datetime < 30min)
-        rows2 = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10)
+        rows2 = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10, connection=db_connection)
 
         # Assert
         assert len(rows1) == 1
@@ -402,49 +401,47 @@ class TestLoadFetchlogs:
 
     def test_load_fetchlogs_pattern_variations(
         self,
-        db_cursor,
+        db_connection,
         clean_fetchlogs
     ):
         """Test load_fetchlogs with various regex patterns."""
         # Arrange
         test_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        db_cursor.execute("""
-            INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
-            VALUES
-                ('lcs-etl-pipeline/measures/2024/test1.json', %s, %s, NULL, false),
-                ('lcs-etl-pipeline/station/2024/test2.json', %s, %s, NULL, false),
-                ('realtime-gzipped/2024-01-01.json', %s, %s, NULL, false)
-        """, (test_time, test_time, test_time, test_time, test_time, test_time))
-        db_cursor.connection.commit()
+        with db_connection.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
+                VALUES
+                    ('lcs-etl-pipeline/measures/2024/test1.json', %s, %s, NULL, false),
+                    ('lcs-etl-pipeline/station/2024/test2.json', %s, %s, NULL, false),
+                    ('realtime-gzipped/2024-01-01.json', %s, %s, NULL, false)
+            """, (test_time, test_time, test_time, test_time, test_time, test_time))
 
-        # Act & Assert - Test different patterns
+            # Act & Assert - Test different patterns
 
-        # Pattern 1: All lcs-etl-pipeline
-        rows = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10)
-        assert len(rows) == 2
+            # Pattern 1: All lcs-etl-pipeline
+            rows = load_fetchlogs(pattern='^lcs-etl-pipeline', limit=10, connection=db_connection)
+            assert len(rows) == 2
 
-        # Reset loaded_datetime to allow re-selection
-        db_cursor.execute("""
-            UPDATE fetchlogs
-            SET loaded_datetime = NOW() - INTERVAL '45 minutes'
-            WHERE key LIKE 'lcs-etl-pipeline%'
-        """)
-        db_cursor.connection.commit()
+            # Reset loaded_datetime to allow re-selection
+            cursor.execute("""
+                UPDATE fetchlogs
+                SET loaded_datetime = NOW() - INTERVAL '45 minutes'
+                WHERE key LIKE 'lcs-etl-pipeline%'
+            """)
 
-        # Pattern 2: Only measures
-        rows = load_fetchlogs(pattern='^lcs-etl-pipeline/measures', limit=10)
-        assert len(rows) == 1
-        assert 'measures' in rows[0][1]
+            # Pattern 2: Only measures
+            rows = load_fetchlogs(pattern='^lcs-etl-pipeline/measures', limit=10, connection=db_connection)
+            assert len(rows) == 1
+            assert 'measures' in rows[0][1]
 
-        # Reset loaded_datetime to allow re-selection
-        db_cursor.execute("""
-            UPDATE fetchlogs
-            SET loaded_datetime = NOW() - INTERVAL '45 minutes'
-            WHERE key LIKE 'realtime%'
-        """)
-        db_cursor.connection.commit()
+            # Reset loaded_datetime to allow re-selection
+            cursor.execute("""
+                UPDATE fetchlogs
+                SET loaded_datetime = NOW() - INTERVAL '45 minutes'
+                WHERE key LIKE 'realtime%'
+            """)
 
-        # Pattern 3: Only realtime
-        rows = load_fetchlogs(pattern='^realtime-gzipped', limit=10)
-        assert len(rows) == 1
-        assert 'realtime' in rows[0][1]
+            # Pattern 3: Only realtime
+            rows = load_fetchlogs(pattern='^realtime-gzipped', limit=10, connection=db_connection)
+            assert len(rows) == 1
+            assert 'realtime' in rows[0][1]

@@ -240,29 +240,8 @@ def sample_metadata_fetchlogs(db_cursor, db_connection, clean_fetchlogs):
         """, (key, modified, test_time))
         fetchlog_ids.append(db_cursor.fetchone()[0])
 
-    db_connection.commit()
     return fetchlog_ids
 
-
-@pytest.fixture
-def sample_pipeline_fetchlogs(db_cursor, db_connection, clean_fetchlogs):
-    """Create sample pipeline measurement fetchlogs."""
-    test_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-    fetchlog_ids = []
-
-    for i in range(5):
-        key = f"lcs-etl-pipeline/measures/test-{i}.csv"
-        modified = test_time + timedelta(hours=i)
-
-        db_cursor.execute("""
-            INSERT INTO fetchlogs (key, last_modified, init_datetime)
-            VALUES (%s, %s, %s)
-            RETURNING fetchlogs_id
-        """, (key, modified, test_time))
-        fetchlog_ids.append(db_cursor.fetchone()[0])
-
-    db_connection.commit()
-    return fetchlog_ids
 
 
 @pytest.fixture

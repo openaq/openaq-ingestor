@@ -16,7 +16,6 @@ class TestLoadFail:
     def test_load_fail_marks_fetchlog_with_error(
         self,
         db_cursor,
-        db_connection,
         clean_fetchlogs
     ):
         """Test that load_fail sets has_error=true."""
@@ -27,7 +26,6 @@ class TestLoadFail:
             RETURNING fetchlogs_id
         """)
         fetchlog_id = db_cursor.fetchone()[0]
-        db_connection.commit()
 
         # Verify initial state
         db_cursor.execute("""
@@ -38,7 +36,6 @@ class TestLoadFail:
 
         # Act
         load_fail(db_cursor, fetchlog_id, Exception("Test error message"))
-        db_connection.commit()
 
         # Assert
         db_cursor.execute("""
@@ -54,7 +51,6 @@ class TestLoadFail:
     def test_load_fail_sets_error_message(
         self,
         db_cursor,
-        db_connection,
         clean_fetchlogs
     ):
         """Test that load_fail stores the exception message."""
@@ -65,13 +61,11 @@ class TestLoadFail:
             RETURNING fetchlogs_id
         """)
         fetchlog_id = db_cursor.fetchone()[0]
-        db_connection.commit()
 
         error_message = "Database connection timeout"
 
         # Act
         load_fail(db_cursor, fetchlog_id, Exception(error_message))
-        db_connection.commit()
 
         # Assert
         db_cursor.execute("""
@@ -86,7 +80,6 @@ class TestLoadFail:
     def test_load_fail_updates_completed_datetime(
         self,
         db_cursor,
-        db_connection,
         clean_fetchlogs
     ):
         """Test that load_fail sets completed_datetime."""
@@ -97,7 +90,6 @@ class TestLoadFail:
             RETURNING fetchlogs_id
         """)
         fetchlog_id = db_cursor.fetchone()[0]
-        db_connection.commit()
 
         # Verify initial state
         db_cursor.execute("""
@@ -109,7 +101,6 @@ class TestLoadFail:
 
         # Act
         load_fail(db_cursor, fetchlog_id, Exception("Test error"))
-        db_connection.commit()
 
         # Assert
         db_cursor.execute("""
@@ -126,7 +117,6 @@ class TestLoadFail:
     def test_load_fail_handles_various_exception_types(
         self,
         db_cursor,
-        db_connection,
         clean_fetchlogs
     ):
         """Test that load_fail handles different exception types."""
@@ -137,7 +127,6 @@ class TestLoadFail:
             RETURNING fetchlogs_id
         """)
         fetchlog_id = db_cursor.fetchone()[0]
-        db_connection.commit()
 
         # Act - test with different exception types
         exceptions = [
@@ -148,7 +137,6 @@ class TestLoadFail:
 
         for exc in exceptions:
             load_fail(db_cursor, fetchlog_id, exc)
-            db_connection.commit()
 
             # Assert - should store the message
             db_cursor.execute("""
@@ -161,13 +149,11 @@ class TestLoadFail:
     def test_load_fail_with_nonexistent_fetchlog_id(
         self,
         db_cursor,
-        db_connection,
         clean_fetchlogs
     ):
         """Test that load_fail doesn't crash with invalid ID."""
         # Act - call with non-existent ID (should not raise exception)
         load_fail(db_cursor, 999999, Exception("Test error"))
-        db_connection.commit()
 
         # Assert - verify no rows were affected
         db_cursor.execute("""
@@ -184,7 +170,6 @@ class TestLoadSuccess:
     def test_load_success_clears_error_flag(
         self,
         db_cursor,
-        db_connection,
         clean_fetchlogs
     ):
         """Test that load_success sets has_error=false."""
@@ -198,7 +183,6 @@ class TestLoadSuccess:
             RETURNING key
         """)
         key = db_cursor.fetchone()[0]
-        db_connection.commit()
 
         # Verify initial state
         db_cursor.execute("""
@@ -208,7 +192,6 @@ class TestLoadSuccess:
 
         # Act
         load_success(db_cursor, [key], message='Success')
-        db_connection.commit()
 
         # Assert
         db_cursor.execute("""
@@ -221,7 +204,6 @@ class TestLoadSuccess:
     def test_load_success_sets_completed_datetime(
         self,
         db_cursor,
-        db_connection,
         clean_fetchlogs
     ):
         """Test that load_success sets completed_datetime."""
@@ -232,7 +214,6 @@ class TestLoadSuccess:
             RETURNING key
         """)
         key = db_cursor.fetchone()[0]
-        db_connection.commit()
 
         # Verify initial state
         db_cursor.execute("""
@@ -243,7 +224,6 @@ class TestLoadSuccess:
 
         # Act
         load_success(db_cursor, [key])
-        db_connection.commit()
 
         # Assert
         db_cursor.execute("""
@@ -259,7 +239,6 @@ class TestLoadSuccess:
     def test_load_success_sets_custom_message(
         self,
         db_cursor,
-        db_connection,
         clean_fetchlogs
     ):
         """Test that load_success stores custom success message."""
@@ -270,13 +249,11 @@ class TestLoadSuccess:
             RETURNING key
         """)
         key = db_cursor.fetchone()[0]
-        db_connection.commit()
 
         custom_message = "Processed 100 measurements successfully"
 
         # Act
         load_success(db_cursor, [key], message=custom_message)
-        db_connection.commit()
 
         # Assert
         db_cursor.execute("""
@@ -290,7 +267,6 @@ class TestLoadSuccess:
     def test_load_success_handles_multiple_keys(
         self,
         db_cursor,
-        db_connection,
         clean_fetchlogs
     ):
         """Test that load_success can update multiple fetchlogs at once."""
@@ -303,11 +279,9 @@ class TestLoadSuccess:
                 RETURNING key
             """, (f'test-batch-{i}.json',))
             keys.append(db_cursor.fetchone()[0])
-        db_connection.commit()
 
         # Act
         load_success(db_cursor, keys, message='Batch processed')
-        db_connection.commit()
 
         # Assert - all should be marked successful
         db_cursor.execute("""
@@ -325,7 +299,6 @@ class TestLoadSuccess:
     def test_load_success_default_message(
         self,
         db_cursor,
-        db_connection,
         clean_fetchlogs
     ):
         """Test that load_success uses 'success' as default message."""
@@ -336,11 +309,9 @@ class TestLoadSuccess:
             RETURNING key
         """)
         key = db_cursor.fetchone()[0]
-        db_connection.commit()
 
         # Act - call without message parameter
         load_success(db_cursor, [key])
-        db_connection.commit()
 
         # Assert
         db_cursor.execute("""
@@ -354,13 +325,11 @@ class TestLoadSuccess:
     def test_load_success_with_empty_keys_list(
         self,
         db_cursor,
-        db_connection,
         clean_fetchlogs
     ):
         """Test that load_success handles empty keys list gracefully."""
         # Act - call with empty list (should not crash)
         load_success(db_cursor, [])
-        db_connection.commit()
 
         # Assert - verify no rows were affected
         db_cursor.execute("""
@@ -373,7 +342,6 @@ class TestLoadSuccess:
     def test_load_success_with_nonexistent_keys(
         self,
         db_cursor,
-        db_connection,
         clean_fetchlogs
     ):
         """Test that load_success doesn't crash with non-existent keys."""
@@ -383,7 +351,6 @@ class TestLoadSuccess:
             ['nonexistent1.json', 'nonexistent2.json'],
             message='test'
         )
-        db_connection.commit()
 
         # Assert - verify no rows were affected
         db_cursor.execute("""

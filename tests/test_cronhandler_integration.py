@@ -349,7 +349,8 @@ class TestCronhandlerDatabaseStateWithLoadFetchlogs:
         rows = load_fetchlogs(
             pattern='^lcs-etl-pipeline/stations/',
             limit=1,
-            ascending=True
+            ascending=True,
+            connection=db_connection,
         )
 
         # Assert - verify at least one record was loaded
@@ -366,7 +367,6 @@ class TestCronhandlerDatabaseStateWithLoadFetchlogs:
 
     def test_load_fetchlogs_skips_recently_loaded(
         self,
-        db_cursor,
         db_connection,
         clean_fetchlogs
     ):
@@ -375,24 +375,25 @@ class TestCronhandlerDatabaseStateWithLoadFetchlogs:
 
         # Arrange - create fetchlog with recent loaded_datetime
         test_time = datetime.now(timezone.utc)
-        db_cursor.execute("""
-            INSERT INTO fetchlogs (key, last_modified, init_datetime, loaded_datetime, jobs)
-            VALUES (%s, %s, %s, %s, 1)
-            RETURNING fetchlogs_id
-        """, (
-            'lcs-etl-pipeline/stations/recent.json',
-            test_time,
-            test_time,
-            test_time - timedelta(minutes=5)  # Loaded 5 minutes ago
-        ))
-        fetchlog_id = db_cursor.fetchone()[0]
-        db_connection.commit()
+        with db_connection.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO fetchlogs (key, last_modified, init_datetime, loaded_datetime, jobs)
+                VALUES (%s, %s, %s, %s, 1)
+                RETURNING fetchlogs_id
+            """, (
+                'lcs-etl-pipeline/stations/recent.json',
+                test_time,
+                test_time,
+                test_time - timedelta(minutes=5)  # Loaded 5 minutes ago
+            ))
+            fetchlog_id = cursor.fetchone()[0]
 
         # Act - try to load again
         rows = load_fetchlogs(
             pattern='^lcs-etl-pipeline/stations/recent',
             limit=10,
-            ascending=True
+            ascending=True,
+            connection=db_connection,
         )
 
         # Assert - file should not be in results (skipped due to recent load)
@@ -410,23 +411,24 @@ class TestCronhandlerDatabaseStateWithLoadFetchlogs:
 
         # Arrange - create fetchlog with error flag
         test_time = datetime.now(timezone.utc)
-        db_cursor.execute("""
-            INSERT INTO fetchlogs (key, last_modified, init_datetime, has_error)
-            VALUES (%s, %s, %s, true)
-            RETURNING fetchlogs_id
-        """, (
-            'lcs-etl-pipeline/stations/error.json',
-            test_time,
-            test_time
-        ))
-        fetchlog_id = db_cursor.fetchone()[0]
-        db_connection.commit()
+        with db_connection.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO fetchlogs (key, last_modified, init_datetime, has_error)
+                VALUES (%s, %s, %s, true)
+                RETURNING fetchlogs_id
+            """, (
+                'lcs-etl-pipeline/stations/error.json',
+                test_time,
+                test_time
+            ))
+            fetchlog_id = cursor.fetchone()[0]
 
         # Act - try to load
         rows = load_fetchlogs(
             pattern='^lcs-etl-pipeline/stations/error',
             limit=10,
-            ascending=True
+            ascending=True,
+            connection=db_connection,
         )
 
         # Assert - error file should not be in results
@@ -435,7 +437,6 @@ class TestCronhandlerDatabaseStateWithLoadFetchlogs:
 
     def test_load_fetchlogs_skips_completed_files(
         self,
-        db_cursor,
         db_connection,
         clean_fetchlogs
     ):
@@ -444,24 +445,25 @@ class TestCronhandlerDatabaseStateWithLoadFetchlogs:
 
         # Arrange - create completed fetchlog
         test_time = datetime.now(timezone.utc)
-        db_cursor.execute("""
-            INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, jobs)
-            VALUES (%s, %s, %s, %s, 1)
-            RETURNING fetchlogs_id
-        """, (
-            'lcs-etl-pipeline/stations/completed.json',
-            test_time,
-            test_time,
-            test_time
-        ))
-        fetchlog_id = db_cursor.fetchone()[0]
-        db_connection.commit()
+        with db_connection.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, jobs)
+                VALUES (%s, %s, %s, %s, 1)
+                RETURNING fetchlogs_id
+            """, (
+                'lcs-etl-pipeline/stations/completed.json',
+                test_time,
+                test_time,
+                test_time
+            ))
+            fetchlog_id = cursor.fetchone()[0]
 
         # Act - try to load
         rows = load_fetchlogs(
             pattern='^lcs-etl-pipeline/stations/completed',
             limit=10,
-            ascending=True
+            ascending=True,
+            connection=db_connection,
         )
 
         # Assert - completed file should not be in results
@@ -470,7 +472,6 @@ class TestCronhandlerDatabaseStateWithLoadFetchlogs:
 
     def test_load_fetchlogs_ascending_order(
         self,
-        db_cursor,
         db_connection,
         clean_fetchlogs
     ):
@@ -481,19 +482,20 @@ class TestCronhandlerDatabaseStateWithLoadFetchlogs:
         old_time = datetime(2024, 1, 1, tzinfo=timezone.utc)
         new_time = datetime(2024, 1, 10, tzinfo=timezone.utc)
 
-        db_cursor.execute("""
-            INSERT INTO fetchlogs (key, last_modified, init_datetime)
-            VALUES
-                ('lcs-etl-pipeline/stations/old.json', %s, %s),
-                ('lcs-etl-pipeline/stations/new.json', %s, %s)
-        """, (old_time, old_time, new_time, new_time))
-        db_connection.commit()
+        with db_connection.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO fetchlogs (key, last_modified, init_datetime)
+                VALUES
+                    ('lcs-etl-pipeline/stations/old.json', %s, %s),
+                    ('lcs-etl-pipeline/stations/new.json', %s, %s)
+            """, (old_time, old_time, new_time, new_time))
 
         # Act - load in ascending order
         rows = load_fetchlogs(
             pattern='^lcs-etl-pipeline/stations/',
             limit=10,
-            ascending=True
+            ascending=True,
+            connection=db_connection,
         )
 
         # Assert - oldest file should be first
@@ -504,7 +506,6 @@ class TestCronhandlerDatabaseStateWithLoadFetchlogs:
 
     def test_load_fetchlogs_descending_order(
         self,
-        db_cursor,
         db_connection,
         clean_fetchlogs
     ):
@@ -515,19 +516,20 @@ class TestCronhandlerDatabaseStateWithLoadFetchlogs:
         old_time = datetime(2024, 1, 1, tzinfo=timezone.utc)
         new_time = datetime(2024, 1, 10, tzinfo=timezone.utc)
 
-        db_cursor.execute("""
-            INSERT INTO fetchlogs (key, last_modified, init_datetime)
-            VALUES
-                ('lcs-etl-pipeline/stations/old.json', %s, %s),
-                ('lcs-etl-pipeline/stations/new.json', %s, %s)
-        """, (old_time, old_time, new_time, new_time))
-        db_connection.commit()
+        with db_connection.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO fetchlogs (key, last_modified, init_datetime)
+                VALUES
+                    ('lcs-etl-pipeline/stations/old.json', %s, %s),
+                    ('lcs-etl-pipeline/stations/new.json', %s, %s)
+            """, (old_time, old_time, new_time, new_time))
 
         # Act - load in descending order
         rows = load_fetchlogs(
             pattern='^lcs-etl-pipeline/stations/',
             limit=10,
-            ascending=False
+            ascending=False,
+            connection=db_connection
         )
 
         # Assert - newest file should be first
