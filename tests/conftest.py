@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 import json
 
 from ingest.settings import settings
-from ingest.context import IngestContext
+from ingest.resources import Resources
 
 
 @pytest.fixture(scope="session")
@@ -38,14 +38,14 @@ def db_cursor(db_connection):
 
 
 @pytest.fixture(scope="function")
-def ingest_context(db_connection, mock_s3):
+def ingest_resources(db_connection, mock_s3):
     """
-    Provides IngestContext with test-managed resources.
+    Provides Resources with test-managed resources.
 
     Database connection and S3 client are managed by test fixtures.
     Context will NOT close these resources (ownership=False).
     """
-    ctx = IngestContext(
+    ctx = Resources(
         connection=db_connection,
         s3_client=mock_s3
     )

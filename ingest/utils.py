@@ -14,14 +14,13 @@ from io import StringIO
 import psycopg2
 # import typer
 
+from .resources import Resources
 from .settings import settings
 
 # app = typer.Typer()
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 
-s3 = boto3.client("s3")
-cw = boto3.client("cloudwatch")
 
 logger = logging.getLogger('utils')
 
@@ -226,152 +225,155 @@ def fix_units(value: str):
 
 
 def deconstruct_path(key: str):
-	"""Parse a file path and extract bucket/key information.
+    """Parse a file path and extract bucket/key information.
 
-	Analyzes a file path string to determine if it's local or S3, then extracts
-	the bucket name and key. Defaults to settings.FETCH_BUCKET if no bucket is specified.
+    Analyzes a file path string to determine if it's local or S3, then extracts
+    the bucket name and key. Defaults to settings.FETCH_BUCKET if no bucket is specified.
 
-	Used by:
-		- Not currently imported by any modules (legacy utility function)
+    Used by:
+        - Not currently imported by any modules (legacy utility function)
 
-	Args:
-		key (str): File path which may be:
-			- Local file path (e.g., '/path/to/file.csv')
-			- S3 URI (e.g., 's3://bucket-name/path/to/file.csv')
-			- S3 key without URI (e.g., 'path/to/file.csv')
+    Args:
+        key (str): File path which may be:
+            - Local file path (e.g., '/path/to/file.csv')
+            - S3 URI (e.g., 's3://bucket-name/path/to/file.csv')
+            - S3 key without URI (e.g., 'path/to/file.csv')
 
-	Returns:
-		dict: Dictionary containing:
-			- 'local' (bool): True if local file, omitted for S3
-			- 'bucket' (str): S3 bucket name (for S3 paths)
-			- 'key' (str): File path/key
+    Returns:
+        dict: Dictionary containing:
+            - 'local' (bool): True if local file, omitted for S3
+            - 'bucket' (str): S3 bucket name (for S3 paths)
+            - 'key' (str): File path/key
 
-	Example:
-		>>> deconstruct_path('s3://my-bucket/data/file.csv')
-		{'bucket': 'my-bucket', 'key': 'data/file.csv'}
-		>>> deconstruct_path('/local/file.csv')
-		{'local': True, 'key': '/local/file.csv'}
-	"""
-	is_local = os.path.isfile(key)
-	is_s3 = bool(re.match(r"s3://[a-zA-Z]+[a-zA-Z0-9_-]+/[a-zA-Z]+", key))
-	is_csv = bool(re.search(r"\.csv(.gz)?$", key))
-	is_json = bool(re.search(r"\.(nd)?json(.gz)?$", key))
-	is_compressed = bool(re.search(r"\.gz$", key))
-	path = {}
-	if is_local:
-		path["local"] = True
-		path["key"] = key
-	elif is_s3:
-		# pull out the bucket name
-		p = key.split("//")[1].split("/")
-		path["bucket"] = p.pop(0)
-		path["key"] = "/".join(p)
-	else:
-		# use the current bucket from settings
-		path["bucket"] = settings.FETCH_BUCKET
-		path["key"] = key
+    Example:
+        >>> deconstruct_path('s3://my-bucket/data/file.csv')
+        {'bucket': 'my-bucket', 'key': 'data/file.csv'}
+        >>> deconstruct_path('/local/file.csv')
+        {'local': True, 'key': '/local/file.csv'}
+    """
+    is_local = os.path.isfile(key)
+    is_s3 = bool(re.match(r"s3://[a-zA-Z]+[a-zA-Z0-9_-]+/[a-zA-Z]+", key))
+    is_csv = bool(re.search(r"\.csv(.gz)?$", key))
+    is_json = bool(re.search(r"\.(nd)?json(.gz)?$", key))
+    is_compressed = bool(re.search(r"\.gz$", key))
+    path = {}
+    if is_local:
+        path["local"] = True
+        path["key"] = key
+    elif is_s3:
+        # pull out the bucket name
+        p = key.split("//")[1].split("/")
+        path["bucket"] = p.pop(0)
+        path["key"] = "/".join(p)
+    else:
+        # use the current bucket from settings
+        path["bucket"] = settings.FETCH_BUCKET
+        path["key"] = key
 
-	logger.debug(path)
-	return path
+    logger.debug(path)
+    return path
 
-def get_data(key: str):
-	"""Retrieve file data from local filesystem or S3.
+def get_data(key: str, resources=None):
+    """Retrieve file data from local filesystem or S3.
 
-	Automatically detects the source (local vs S3) from the key format and
-	returns a file-like object. Handles gzip-compressed files transparently.
+    Automatically detects the source (local vs S3) from the key format and
+    returns a file-like object. Handles gzip-compressed files transparently.
 
-	Used by:
-		- ingest/fetch.py
+    Used by:
+        - ingest/fetch.py
 
-	Args:
-		key (str): File path/key in one of these formats:
-			- 's3://bucket/path/to/file.csv' - Full S3 URI
-			- 'local:///path/to/file.csv' - Local file with URI prefix
-			- '/path/to/file.csv' - Absolute local path
-			- 'path/to/file.csv' - S3 key (uses settings.FETCH_BUCKET)
+    Args:
+        key (str): File path/key in one of these formats:
+            - 's3://bucket/path/to/file.csv' - Full S3 URI
+            - 'local:///path/to/file.csv' - Local file with URI prefix
+            - '/path/to/file.csv' - Absolute local path
+            - 'path/to/file.csv' - S3 key (uses settings.FETCH_BUCKET)
 
-	Returns:
-		file-like object: Readable stream of file contents
-			- For local files: file handle from get_file()
-			- For S3 files: boto3 StreamingBody or GzipFile
+    Returns:
+        file-like object: Readable stream of file contents
+            - For local files: file handle from get_file()
+            - For S3 files: boto3 StreamingBody or GzipFile
 
-	Example:
-		>>> data = get_data('s3://my-bucket/data.csv.gz')
-		>>> content = data.read()
-	"""
-	# check to see if we were provided with a path that includes the source
-	# e.g.
-	# s3://bucket/key
-	# local://drive/key
-	# /key (assume local)
-	# or no source
-	# key (no forward slash, assume etl bucket)
-	if re.match(r"local://[a-zA-Z]+", key):
-		key = key.replace("local://", "")
+    Example:
+        >>> data = get_data('s3://my-bucket/data.csv.gz')
+        >>> content = data.read()
+    """
+    # if we have not provided a resource lets create one
+    # check to see if we were provided with a path that includes the source
+    # e.g.
+    # s3://bucket/key
+    # local://drive/key
+    # /key (assume local)
+    # or no source
+    # key (no forward slash, assume etl bucket)
+    if re.match(r"local://[a-zA-Z]+", key):
+        key = key.replace("local://", "")
 
-	is_local = os.path.isfile(key)
-	is_s3 = bool(re.match(r"s3://[a-zA-Z]+[a-zA-Z0-9_-]+/[a-zA-Z]+", key))
-	#is_csv = bool(re.search(r"\.csv(.gz)?$", key))
-	#is_json = bool(re.search(r"\.(nd)?json(.gz)?$", key))
-	is_compressed = bool(re.search(r"\.gz$", key))
-	logger.debug(f"checking - {key}\ns3: {is_s3}; is_local: {is_local}")
+    is_local = os.path.isfile(key)
+    is_s3 = bool(re.match(r"s3://[a-zA-Z]+[a-zA-Z0-9_-]+/[a-zA-Z]+", key))
+    #is_csv = bool(re.search(r"\.csv(.gz)?$", key))
+    #is_json = bool(re.search(r"\.(nd)?json(.gz)?$", key))
+    is_compressed = bool(re.search(r"\.gz$", key))
+    logger.debug(f"checking - {key}\ns3: {is_s3}; is_local: {is_local}")
 
-	if is_local:
-		return get_file(key)
-	elif is_s3:
-		# pull out the bucket name
-		path = key.split("//")[1].split("/")
-		bucket = path.pop(0)
-		key = "/".join(path)
-	else:
-		# use the current bucket from settings
-		bucket = settings.FETCH_BUCKET
+    if is_local:
+        return get_file(key)
+    elif is_s3:
+        # pull out the bucket name
+        path = key.split("//")[1].split("/")
+        bucket = path.pop(0)
+        key = "/".join(path)
+    else:
+        # use the current bucket from settings
+        bucket = settings.FETCH_BUCKET
 
-	# stream the file
-	logger.debug(f"streaming s3 file data from s3://{bucket}/{key}")
-	obj = s3.get_object(
-		Bucket=bucket,
-		Key=key,
-		)
-	f = obj["Body"]
-	if is_compressed:
-		return gzip.GzipFile(fileobj=obj["Body"])
-	else:
-		return obj["Body"]
+    # stream the file
+    logger.debug(f"streaming s3 file data from s3://{bucket}/{key}")
+    rs = resources or Resources()
+    obj = rs.s3.get_object(
+        Bucket=bucket,
+        Key=key,
+        )
+    f = obj["Body"]
+    if is_compressed:
+        return gzip.GzipFile(fileobj=obj["Body"])
+    else:
+        return obj["Body"]
 
 
 def get_file(filepath: str):
-	"""Open a local file for reading, handling gzip compression.
+    """Open a local file for reading, handling gzip compression.
 
-	Opens local files and automatically decompresses if the file has a .gz extension.
+      Opens local files and automatically decompresses if the file has a .gz extension.
 
-	Used by:
-		- ingest/lcsV2.py
-		- ingest/utils.py (via get_data)
+      Used by:
+      - ingest/lcsV2.py
+      - ingest/utils.py (via get_data)
 
-	Args:
-		filepath (str): Path to local file
+      Args:
+      filepath (str): Path to local file
 
-	Returns:
-		file-like object: File handle for reading
-			- GzipFile for .gz files (binary mode)
-			- TextIOWrapper for regular files (utf-8 encoding)
+      Returns:
+      file-like object: File handle for reading
+      - GzipFile for .gz files (binary mode)
+      - TextIOWrapper for regular files (utf-8 encoding)
 
-	Example:
-		>>> f = get_file('/path/to/data.csv.gz')
-		>>> content = f.read()
-	"""
-	is_compressed = bool(re.search(r"\.gz$", filepath))
-	logger.debug(f"streaming local file data from {filepath}")
-	if is_compressed:
-		return gzip.open(filepath, 'rb')
-	else:
-		return io.open(filepath, "r", encoding="utf-8")
+      Example:
+      >>> f = get_file('/path/to/data.csv.gz')
+      >>> content = f.read()
+      """
+    is_compressed = bool(re.search(r"\.gz$", filepath))
+    logger.debug(f"streaming local file data from {filepath}")
+    if is_compressed:
+        return gzip.open(filepath, 'rb')
+    else:
+        return io.open(filepath, "r", encoding="utf-8")
 
 
 def get_object(
         key: str,
-        bucket: str = settings.FETCH_BUCKET
+        bucket: str = settings.FETCH_BUCKET,
+        resources = None,
 ):
     """Retrieve and decompress an S3 object as text.
 
@@ -397,8 +399,9 @@ def get_object(
     """
     key = unquote_plus(key)
     text = ''
+    rs = resources or Resources()
     logger.debug(f"Getting {key} from {bucket}")
-    obj = s3.get_object(
+    obj = rs.s3.get_object(
         Bucket=bucket,
         Key=key,
     )
@@ -414,7 +417,8 @@ def get_object(
 def put_object(
         data: str,
         key: str,
-        bucket: str = settings.FETCH_BUCKET
+        bucket: str = settings.FETCH_BUCKET,
+        resources = None,
 ):
     """Upload a gzip-compressed string to S3 or local filesystem.
 
@@ -448,7 +452,8 @@ def put_object(
         txt.close()
     else:
         logger.info(f"Uploading file to {bucket}/{key}")
-        s3.put_object(
+        rs = resources or Resources()
+        rs.s3.put_object(
             Bucket=bucket,
             Key=key,
             Body=out.getvalue(),

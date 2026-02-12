@@ -63,12 +63,12 @@ class TestIngestClientIntegration:
 
     def test_ingest_simple_data_to_staging(
         self,
-        ingest_context,
+        ingest_resources,
         sample_fetchlog
     ):
         """Test that simple data is correctly inserted into staging tables."""
         # Arrange
-        client = IngestClient(context=ingest_context)
+        client = IngestClient(resources=ingest_resources)
         test_file = get_test_path('dataV2.json')
 
         # Act
@@ -76,7 +76,7 @@ class TestIngestClientIntegration:
         client.dump(load=True)
 
         # Assert - Check staging_sensornodes
-        cursor = ingest_context.cursor()
+        cursor = ingest_resources.cursor()
         cursor.execute("SELECT COUNT(*) FROM staging_sensornodes")
         node_count = cursor.fetchone()[0]
         assert node_count == 3, f"Expected 3 sensor nodes, got {node_count}"
@@ -103,12 +103,12 @@ class TestIngestClientIntegration:
 
     def test_ingest_realtime_measures_to_staging(
         self,
-        ingest_context,
+        ingest_resources,
         sample_fetchlog
     ):
         """Test realtime measures data insertion."""
         # Arrange
-        client = IngestClient(context=ingest_context)
+        client = IngestClient(resources=ingest_resources)
         test_file = get_test_path('testdata_realtime_measures.ndjson')
 
         # Act
@@ -116,7 +116,7 @@ class TestIngestClientIntegration:
         client.dump(load=True)
 
         # Assert - Realtime data should only have measurements, no nodes
-        cursor = ingest_context.cursor()
+        cursor = ingest_resources.cursor()
         cursor.execute("SELECT COUNT(*) FROM staging_sensornodes WHERE fetchlogs_id = %s",
                       (sample_fetchlog,))
         node_count = cursor.fetchone()[0]
@@ -144,12 +144,12 @@ class TestIngestClientIntegration:
 
     def test_ingest_clarity_data_to_staging(
         self,
-        ingest_context,
+        ingest_resources,
         sample_fetchlog
     ):
         """Test Clarity provider data insertion."""
         # Arrange
-        client = IngestClient(context=ingest_context)
+        client = IngestClient(resources=ingest_resources)
         test_file = get_test_path('testdata_lcs_clarity.json')
 
         # Act
@@ -157,7 +157,7 @@ class TestIngestClientIntegration:
         client.dump(load=True)
 
         # Assert
-        cursor = ingest_context.cursor()
+        cursor = ingest_resources.cursor()
         cursor.execute("SELECT COUNT(*) FROM staging_sensornodes WHERE fetchlogs_id = %s",
                       (sample_fetchlog,))
         node_count = cursor.fetchone()[0]
@@ -182,12 +182,12 @@ class TestIngestClientIntegration:
 
     def test_ingest_senstate_csv_to_staging(
         self,
-        ingest_context,
+        ingest_resources,
         sample_fetchlog
     ):
         """Test Senstate CSV data insertion."""
         # Arrange
-        client = IngestClient(context=ingest_context)
+        client = IngestClient(resources=ingest_resources)
         test_file = get_test_path('testdata_lcs_senstate.csv')
 
         # Act
@@ -195,7 +195,7 @@ class TestIngestClientIntegration:
         client.dump(load=True)
 
         # Assert - Senstate CSV has measurements but no nodes (location-id-param)
-        cursor = ingest_context.cursor()
+        cursor = ingest_resources.cursor()
         cursor.execute("SELECT COUNT(*) FROM staging_sensornodes WHERE fetchlogs_id = %s",
                       (sample_fetchlog,))
         node_count = cursor.fetchone()[0]
@@ -209,14 +209,14 @@ class TestIngestClientIntegration:
 
     def test_ingest_transform_data_with_systems_sensors(
         self,
-        ingest_context,
+        ingest_resources,
         sample_fetchlog
     ):
         """Test data with systems and sensors using transactional rollback."""
         # Arrange
         # Assert - Check all entity types
-        cursor = ingest_context.cursor()
-        client = IngestClient(context=ingest_context)
+        cursor = ingest_resources.cursor()
+        client = IngestClient(resources=ingest_resources)
         test_file = get_test_path('testdata_transform.json')
 
         # Act
@@ -270,20 +270,20 @@ class TestIngestClientIntegration:
             assert sensor[0] is not None, "Sensor should reference system ingest_id"
 
         cursor.close()
-        # Test ends, ingest_context fixture automatically rolls back all changes
+        # Test ends, ingest_resources fixture automatically rolls back all changes
 
     def test_ingest_updates_fetchlog_loaded_datetime(
         self,
-        ingest_context,
+        ingest_resources,
         sample_fetchlog
     ):
         """Test that dump updates fetchlogs.loaded_datetime."""
         # Arrange
-        client = IngestClient(context=ingest_context)
+        client = IngestClient(resources=ingest_resources)
         test_file = get_test_path('dataV2.json')
 
         # Get initial loaded_datetime (should be NULL)
-        cursor = ingest_context.cursor()
+        cursor = ingest_resources.cursor()
         cursor.execute("SELECT loaded_datetime FROM fetchlogs WHERE fetchlogs_id = %s",
                       (sample_fetchlog,))
         initial_loaded = cursor.fetchone()[0]
@@ -308,13 +308,13 @@ class TestIngestClientIntegration:
 
     def test_ingest_empty_file_marks_fetchlog(
         self,
-        ingest_context,
+        ingest_resources,
         clean_fetchlogs
     ):
         """Test that processing empty file still updates fetchlog."""
         # Arrange
         test_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        cursor = ingest_context.cursor()
+        cursor = ingest_resources.cursor()
         cursor.execute("""
             INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
             VALUES ('empty-test-data.json', %s, %s, NULL, false)
@@ -322,7 +322,7 @@ class TestIngestClientIntegration:
         """, (test_time, test_time))
         fetchlog_id = cursor.fetchone()[0]
 
-        client = IngestClient(context=ingest_context)
+        client = IngestClient(resources=ingest_resources)
         # Load an empty array or minimal file
         test_file = get_test_path('dataV2.json')  # We'll use this but not load much
 
@@ -341,14 +341,14 @@ class TestIngestClientIntegration:
 
     def test_ingest_unsupported_file_marks_fetchlog_with_error(
         self,
-        ingest_context,
+        ingest_resources,
         clean_fetchlogs
     ):
         """Test that submit_file_error method works"""
         # Arrange
         test_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
         test_file = get_test_path('unsupported_data.tab')  # We'll use this but not load much
-        cursor = ingest_context.cursor()
+        cursor = ingest_resources.cursor()
         cursor.execute("""
             INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
             VALUES (%s, %s, %s, NULL, false)
@@ -358,7 +358,7 @@ class TestIngestClientIntegration:
         rows = cursor.fetchall()
         fetchlog_id = rows[0][0]
 
-        client = IngestClient(context=ingest_context)
+        client = IngestClient(resources=ingest_resources)
         # Load the unsupported file which should result in the fetchlog record updated
         client.load_keys(rows)
         # Force dump even with data to test the tracking
@@ -374,13 +374,13 @@ class TestIngestClientIntegration:
 
     def test_ingest_multiple_fetchlogs_tracked_separately(
         self,
-        ingest_context,
+        ingest_resources,
         clean_fetchlogs
     ):
         """Test that multiple files are tracked with correct fetchlog_ids."""
         # Arrange - create two fetchlog records
         test_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        cursor = ingest_context.cursor()
+        cursor = ingest_resources.cursor()
         cursor.execute("""
             INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
             VALUES
@@ -396,7 +396,7 @@ class TestIngestClientIntegration:
         fetchlog_id1, fetchlog_id2 = fetchlog_ids[0], fetchlog_ids[1]
 
         # Act - Load two different files with different fetchlog IDs
-        client = IngestClient(context=ingest_context)
+        client = IngestClient(resources=ingest_resources)
         client.load_keys(rows)
         client.dump(load=True)
 
@@ -417,12 +417,12 @@ class TestIngestClientIntegration:
 
     def test_ingest_verifies_unique_constraints(
         self,
-        ingest_context,
+        ingest_resources,
         sample_fetchlog
     ):
         """Test that unique constraints on staging tables are enforced."""
         # Arrange
-        client = IngestClient(context=ingest_context)
+        client = IngestClient(resources=ingest_resources)
         test_file = get_test_path('dataV2.json')
 
         # Act
@@ -430,7 +430,7 @@ class TestIngestClientIntegration:
         client.dump(load=True)
 
         # Assert - Verify unique constraint on ingest_id
-        cursor = ingest_context.cursor()
+        cursor = ingest_resources.cursor()
         cursor.execute("""
             SELECT ingest_id, COUNT(*)
             FROM staging_sensornodes

@@ -2,7 +2,7 @@ import boto3
 import logging
 import psycopg2
 from .settings import settings
-from .context import IngestContext
+from .resources import Resources
 from .utils import get_logs_from_pattern, load_fetchlogs
 from .lcs import load_metadata_db
 from .lcsV2 import IngestClient
@@ -25,20 +25,20 @@ logging.getLogger('botocore').setLevel(logging.WARNING)
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 
 
-def handler(event, context, ingest_context=None):
+def handler(event, context, resources=None):
     """
     Lambda handler for S3 events (SNS-wrapped or direct) and EventBridge cron events.
 
     Args:
         event: Lambda event (S3, SNS, or EventBridge)
         context: Lambda context
-        ingest_context: Optional IngestContext for testing (default: creates new context)
+        resources: Optional Resources for testing (default: creates new context)
     """
     logger.debug(event)
     records = event.get("Records")
     if records is not None:
         # Use provided context or create new one
-        ctx = ingest_context or IngestContext()
+        ctx = resources or Resources()
 
         try:
             cursor = ctx.cursor()

@@ -16,7 +16,7 @@ import psycopg2
 import typer
 from io import StringIO
 from .settings import settings
-from .context import IngestContext
+from .resources import Resources
 from .utils import (
     get_query,
     clean_csv_value,
@@ -45,6 +45,9 @@ warnings.filterwarnings(
 
 def to_geometry(key, data):
     # could be passed as lat/lng or coordinates
+    # initialize for later checks
+    lat = lon = None
+
     if key == 'coordinates':
         data = data.get(key)
 
@@ -63,7 +66,6 @@ def to_geometry(key, data):
     if None in [lat, lon]:
         raise Exception('Missing value for coordinates')
 
-    # could add more checks
     return f"SRID={srid};POINT({lon} {lat})"
 
 def to_timestamp(key, data):
@@ -86,6 +88,8 @@ def to_timestamp(key, data):
     else:
         return dt
 
+    return dt.isoformat()
+
 def to_sensorid(key, data):
     param = data.get(key)
     location = data.get('location')
@@ -100,7 +104,7 @@ def to_nodeid(key, data):
 
 class IngestClient:
     def __init__(
-        self, key=None, fetchlogs_id=None, data=None, context=None
+        self, key=None, fetchlogs_id=None, resources=None
     ):
         self.key = key
         self.fetchlogs_id = fetchlogs_id
@@ -117,13 +121,13 @@ class IngestClient:
         self.matching_method = 'ingest-id'
         self.source = None
 
-        # Resource management via context
-        if context:
-            self.context = context
-            self._owns_context = False
+        # Resource management via resources
+        if resources:
+            self.resources = resources
+            self._owns_resources = False
         else:
-            self.context = IngestContext()
-            self._owns_context = True
+            self.resources = Resources()
+            self._owns_resources = True
 
         self.node_map = {
             "fetchlogs_id": {},
@@ -156,37 +160,26 @@ class IngestClient:
             "lon": {},
             "key":{"col": "ingest_id"},
             }
-        # if fetchlogs_id but no key or data
-        # get key
-        # if key, load data
-        # if data
-        if data is not None and isinstance(data, dict):
-            self.load(data)
+
 
     def get_connection(self, autocommit: bool = True):
-      """Get database connection via context."""
-      return self.context.get_connection(autocommit=autocommit)
-
-    # def set_connection(self, connection):
-    #   """Set external connection (for testing backward compatibility)."""
-    #   self.context = IngestContext(connection=connection)
-    #   self._owns_context = False
-    #   return self
+      """Get database connection via resources."""
+      return self.resources.get_connection(autocommit=autocommit)
 
     @property
     def connection(self):
-      """Get connection from context."""
-      return self.context._connection
+      """Get connection from resources."""
+      return self.resources._connection
 
     def close(self):
-      """Close context if we own it."""
-      if self._owns_context:
-          self.context.close()
+      """Close resources if we own it."""
+      if self._owns_resources:
+          self.resources.close()
 
     def commit(self):
-      """Commit context if we own it."""
-      if self._owns_context:
-          self.context.commit()
+      """Commit resources if we own it."""
+      if self._owns_resources:
+          self.resources.commit()
 
 
     def process(self, key, data, mp):
@@ -367,15 +360,12 @@ class IngestClient:
             if load:
                 logger.info(f'processing {len(self.measurements)} measurements');
                 query = get_query("etl_process_measurements.sql")
-                try:
-                    cursor.execute(query)
-                    logger.info("dump_measurements: measurements: %s; time: %0.4f", len(self.measurements), time() - start_time)
-                    for notice in connection.notices:
-                        logger.debug(f"etl_process_measurements {notice.rstrip()}")
 
+                cursor.execute(query)
+                logger.info("dump_measurements: measurements: %s; time: %0.4f", len(self.measurements), time() - start_time)
 
-                except Exception as err:
-                    logger.error(err)
+                for notice in connection.notices:
+                    logger.debug(f"etl_process_measurements {notice.rstrip()}")
 
         self.close()
 
@@ -392,22 +382,22 @@ class IngestClient:
             self.load_measurements(data.get('measures'))
 
 
-    def reset(self):
-        """
-        Reset the client to the new state. Mostly for testing purposes
-        """
-        logger.debug("Reseting the client data")
-        self.measurements = []
-        self.nodes = []
-        self.systems = []
-        self.sensors = []
-        self.flags = []
-        self.keys = []
-        self.key = None
-        self.fetchlogs_id = None
-        self.node_ids = []
-        self.system_ids = []
-        self.sensor_ids = []
+    # def reset(self):
+    #     """
+    #     Reset the client to the new state. Mostly for testing purposes
+    #     """
+    #     logger.debug("Reseting the client data")
+    #     self.measurements = []
+    #     self.nodes = []
+    #     self.systems = []
+    #     self.sensors = []
+    #     self.flags = []
+    #     self.keys = []
+    #     self.key = None
+    #     self.fetchlogs_id = None
+    #     self.node_ids = []
+    #     self.system_ids = []
+    #     self.sensor_ids = []
 
 
     def load_keys(self, rows):

@@ -5,7 +5,7 @@ import psycopg2
 from .settings import settings
 
 
-class IngestContext:
+class Resources:
     """
     Manages lifecycle of database connections and AWS clients for ingest operations.
 
@@ -14,13 +14,13 @@ class IngestContext:
 
     Usage:
         # Production - creates resources automatically
-        with IngestContext() as ctx:
+        with Resources() as ctx:
             ctx.s3.list_objects_v2(Bucket="my-bucket")
             cursor = ctx.cursor()
             cursor.execute("SELECT * FROM fetchlogs")
 
         # Testing - inject mocked resources
-        ctx = IngestContext(connection=mock_db, s3_client=mock_s3)
+        ctx = Resources(connection=mock_db, s3_client=mock_s3)
         # ctx will not close injected resources
     """
 
@@ -137,7 +137,7 @@ class IngestContext:
     # Context manager protocol
 
     def __enter__(self):
-        """Support 'with IngestContext() as ctx:' pattern."""
+        """Support 'with Resources() as ctx:' pattern."""
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
