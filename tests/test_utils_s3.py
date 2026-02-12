@@ -135,6 +135,20 @@ class TestGetObject:
         with pytest.raises(Exception):
             get_object('nonexistent-file.json', bucket=bucket_name, resources=ingest_resources)
 
+    def test_get_object_without_resources_creates_default(self, s3_setup):
+        """Test that get_object works without explicit resources parameter.
+
+        When resources=None, function should create Resources() internally.
+        """
+        s3_client, bucket_name = s3_setup
+
+        # Call without resources parameter - should use default Resources()
+        result = get_object('test-data.json.gz', bucket=bucket_name)
+
+        # Should still work and return decompressed content
+        assert isinstance(result, str)
+        assert 'test' in result
+
 
 class TestPutObject:
     """Tests for put_object() S3 write function."""
@@ -188,6 +202,26 @@ class TestPutObject:
         # Verify nested path was created
         nested_file = tmp_path / 'path' / 'to' / 'nested' / 'file.json.gz'
         assert nested_file.exists()
+
+    def test_put_object_without_resources_creates_default(self, s3_setup):
+        """Test that put_object works without explicit resources parameter.
+
+        When resources=None, function should create Resources() internally.
+        """
+        s3_client, bucket_name = s3_setup
+
+        test_data = '{"default": "resources"}'
+
+        # Call without resources parameter - should use default Resources()
+        put_object(test_data, 'default-resources.json.gz', bucket=bucket_name)
+
+        # Verify file was uploaded
+        response = s3_client.get_object(Bucket=bucket_name, Key='default-resources.json.gz')
+        compressed_content = response['Body'].read()
+        decompressed = gzip.decompress(compressed_content).decode('utf-8')
+
+        assert 'default' in decompressed
+        assert 'resources' in decompressed
 
 
 class TestDeconstructPath:
@@ -303,6 +337,21 @@ class TestGetData:
 
         content = result.read().decode('utf-8')
         assert 'test' in content
+
+    def test_get_data_without_resources_creates_default(self, s3_setup):
+        """Test that get_data works without explicit resources parameter.
+
+        When resources=None, function should create Resources() internally.
+        """
+        s3_client, bucket_name = s3_setup
+
+        # Call without resources parameter - should use default Resources()
+        result = get_data(f's3://{bucket_name}/test-data.json.gz')
+
+        # Should still work and decompress
+        content = result.read().decode('utf-8')
+        assert 'test' in content
+        assert 'data' in content
 
 
 class TestGetFile:
