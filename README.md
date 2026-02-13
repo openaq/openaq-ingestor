@@ -288,7 +288,116 @@ poetry run pytest tests/test_handler_integration.py::TestHandlerSNSEvents::test_
 
 ## Development Workflow
 
-### Processing a Test File Locally
+### Using check.py - File Loading CLI Utility
+
+The `check.py` utility provides a command-line interface for loading and testing individual files from S3 or local filesystem.
+
+#### Basic Usage
+
+```bash
+# Full load (staging + ETL to final tables)
+python check.py KEY
+
+# Preview mode - see what's in the file without loading to DB
+python check.py KEY --preview
+
+# Stage-only mode - load to staging tables, skip ETL
+python check.py KEY --stage-only
+
+# Dry run - full workflow with rollback
+python check.py KEY --dryrun
+```
+
+#### Download Option
+
+The `--download` flag downloads S3 files locally before processing, and can be combined with any mode:
+
+```bash
+# Download from S3 and do full load
+python check.py s3-key.json --download
+
+# Download and preview (no DB changes)
+python check.py s3-key.json --download --preview
+
+# Download and stage-only
+python check.py s3-key.json --download --stage-only
+
+# Download and dry run
+python check.py s3-key.json --download --dryrun
+
+# Download to specific location
+python check.py s3-key.json --download --output ~/my-files/
+```
+
+#### Examples with Local Test Files
+
+```bash
+# Preview test file contents
+python check.py tests/testdata_lcs_clarity.json --preview
+
+# Load test file with full ETL processing
+python check.py tests/testdata_lcs_clarity.json
+
+# Dry run - test the full workflow and rollback
+python check.py tests/testdata_lcs_clarity.json --dryrun
+
+# Load to staging only (useful for debugging ETL separately)
+python check.py tests/testdata_lcs_clarity.json --stage-only
+```
+
+#### Examples with S3 Files
+
+```bash
+# Preview S3 file without loading to DB (reads directly from S3)
+python check.py lcs-etl-pipeline/measures/airgradient/2025-02-14/data.json --preview
+
+# Download S3 file and do full load
+python check.py lcs-etl-pipeline/measures/airgradient/2025-02-14/data.json --download
+
+# Download and preview only (saves file locally, no DB changes)
+python check.py lcs-etl-pipeline/measures/clarity/2025-02-14/data.json --download --preview
+
+# Full load from S3 to database (without downloading)
+python check.py lcs-etl-pipeline/measures/clarity/2025-02-14/measurements.json
+
+# Dry run from S3 (safe testing with rollback)
+python check.py lcs-etl-pipeline/measures/purpleair/2025-02-14/data.ndjson --dryrun
+
+# Download and dry run (saves locally + tests load with rollback)
+python check.py lcs-etl-pipeline/measures/purpleair/2025-02-14/data.ndjson --download --dryrun
+
+# Load with specific fetchlogs ID
+python check.py lcs-etl-pipeline/measures/clarity/data.json --fetchlogs-id 12345
+```
+
+#### Options
+
+```bash
+# Use specific environment file
+python check.py data.json --env .env.staging
+
+# Use AWS profile
+python check.py s3-key.json --profile dev-aws
+
+# Enable debug logging
+python check.py data.json --debug
+
+# Don't use temp tables (useful for inspecting staging data)
+python check.py data.json --keep --stage-only
+
+# Combine options (download + dry run + custom output location)
+python check.py s3-key.json --download --dryrun --output ~/Downloads/ --profile production
+```
+
+#### Output
+
+The utility provides detailed summaries at each step:
+
+- **Client Summary**: Nodes, systems, sensors, measurements loaded into memory
+- **Staging Summary**: Counts and date ranges in staging tables
+- **Current Data Summary**: Final table counts after ETL processing (full load mode only)
+
+### Processing a Test File with Python API
 
 1. Place test file in the ingest directory or provide path
 2. Run with Python:
