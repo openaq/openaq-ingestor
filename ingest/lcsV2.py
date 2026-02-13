@@ -422,7 +422,7 @@ class IngestClient:
 
         # is it a local file? This is used for dev
         # but likely fine to leave in
-        logger.info(os.path.expanduser(key))
+        # logger.debug(os.path.expanduser(key))
         if os.path.exists(os.path.expanduser(key)):
             content = get_file(os.path.expanduser(key)).read()
         else:

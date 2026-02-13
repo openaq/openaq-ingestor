@@ -259,11 +259,12 @@ def deconstruct_path(key: str):
     is_compressed = bool(re.search(r"\.gz$", key))
     path = {}
     if is_local:
-        path["local"] = True
+        path["location"] = 'local'
         path["key"] = key
     elif is_s3:
         # pull out the bucket name
         p = key.split("//")[1].split("/")
+        path["location"] = "s3"
         path["bucket"] = p.pop(0)
         path["key"] = "/".join(p)
     else:
@@ -271,7 +272,6 @@ def deconstruct_path(key: str):
         path["bucket"] = settings.FETCH_BUCKET
         path["key"] = key
 
-    logger.debug(path)
     return path
 
 def get_data(key: str, resources=None):
