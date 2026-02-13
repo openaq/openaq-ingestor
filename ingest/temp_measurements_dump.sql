@@ -1,41 +1,27 @@
 DROP TABLE IF EXISTS
-  staging_sensors
-, staging_measurements
+--  staging_sensors
+  staging_measurements
 , staging_inserted_measurements;
 
 
-CREATE {table} IF NOT EXISTS staging_sensors (
-    ingest_id text,
-    is_new boolean DEFAULT true,
-    source_name text NOT NULL,
-    source_id text NOT NULL,
-    sensors_id int,
-    sensor_systems_id int,
-    ingest_sensor_systems_id text,
-    status text,
-    measurand text,
-    units text,
-    measurands_id int,
-    averaging_interval_seconds int,
-    logging_interval_seconds int,
-    metadata jsonb,
-    fetchlogs_id int
-);
-
 -- CREATE {table} IF NOT EXISTS staging_sensors (
---     ingest_id text NOT NULL,
+--     ingest_id text,
 --     is_new boolean DEFAULT true,
 --     source_name text NOT NULL,
 --     source_id text NOT NULL,
---     measurand text NOT NULL,
 --     sensors_id int,
 --     sensor_systems_id int,
 --     ingest_sensor_systems_id text,
+--     status text,
+--     measurand text,
 --     units text,
 --     measurands_id int,
+--     averaging_interval_seconds int,
+--     logging_interval_seconds int,
 --     metadata jsonb,
 --     fetchlogs_id int
 -- );
+
 
 CREATE {table} IF NOT EXISTS staging_measurements (
     ingest_id text NOT NULL,

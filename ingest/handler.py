@@ -2,15 +2,15 @@ import boto3
 import logging
 import psycopg2
 from .settings import settings
+from .resources import Resources
+from .utils import get_logs_from_pattern, load_fetchlogs
 from .lcs import load_metadata_db
-from .lcsV2 import load_measurements_db, load_measurements_pattern
+from .lcsV2 import IngestClient
 from .fetch import load_db
 from time import time
 import json
 
 from datetime import datetime, timezone
-
-s3c = boto3.client("s3")
 
 logger = logging.getLogger('handler')
 
@@ -25,57 +25,73 @@ logging.getLogger('botocore').setLevel(logging.WARNING)
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 
 
-def handler(event, context):
+def handler(event, context, resources=None):
+    """
+    Lambda handler for S3 events (SNS-wrapped or direct) and EventBridge cron events.
+
+    Args:
+        event: Lambda event (S3, SNS, or EventBridge)
+        context: Lambda context
+        resources: Optional Resources for testing (default: creates new context)
+    """
     logger.debug(event)
     records = event.get("Records")
     if records is not None:
+        # Use provided context or create new one
+        ctx = resources or Resources()
+
         try:
-            with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-                with connection.cursor() as cursor:
-                    connection.set_session(autocommit=True)
-                    for record in records:
-                        if record.get('EventSource') == 'aws:sns':
-                            keys = getKeysFromSnsRecord(record)
-                        else:
-                            keys = getKeysFromS3Record(record)
+            cursor = ctx.cursor()
 
-                        for obj in keys:
-                            bucket = obj['bucket']
-                            key = obj['key']
-                            lov2 = s3c.list_objects_v2(
-                                Bucket=bucket, Prefix=key, MaxKeys=1
+            try:
+                for record in records:
+                    if record.get('EventSource') == 'aws:sns':
+                        keys = getKeysFromSnsRecord(record)
+                    else:
+                        keys = getKeysFromS3Record(record)
+
+                    for obj in keys:
+                        bucket = obj['bucket']
+                        key = obj['key']
+
+                        # Use ctx.s3 instead of creating client
+                        lov2 = ctx.s3.list_objects_v2(
+                            Bucket=bucket, Prefix=key, MaxKeys=1
+                        )
+
+                        try:
+                            file_size = lov2["Contents"][0]["Size"]
+                            last_modified = lov2["Contents"][0]["LastModified"]
+
+                        except KeyError:
+                            logger.error(f"could not get info from obj {lov2}")
+                            file_size = None
+                            last_modified = datetime.now().replace(
+                                tzinfo=timezone.utc
                             )
 
-                            try:
-                                file_size = lov2["Contents"][0]["Size"]
-                                last_modified = lov2["Contents"][0]["LastModified"]
-                            except KeyError:
-                                logger.error("""
-                                could not get info from obj
-                                """)
-                                file_size = None
-                                last_modified = datetime.now().replace(
-                                    tzinfo=timezone.utc
-                                )
-
-                            cursor.execute(
-                                """
-                                INSERT INTO fetchlogs (key
-                                , file_size
-                                , last_modified
-                                , init_datetime
-                                )
-                                VALUES(%s, %s, %s, now())
-                                ON CONFLICT (key) DO UPDATE
-                                SET last_modified=EXCLUDED.last_modified,
-                                completed_datetime=NULL
-                                RETURNING *;
-                                """,
-                                (key, file_size, last_modified, ),
+                        cursor.execute(
+                            """
+                            INSERT INTO fetchlogs (key
+                            , file_size
+                            , last_modified
+                            , init_datetime
                             )
-                            row = cursor.fetchone()
-                            connection.commit()
-                            logger.info(f"Inserted: {bucket}:{key}")
+                            VALUES(%s, %s, %s, now())
+                            ON CONFLICT (key) DO UPDATE
+                            SET last_modified=EXCLUDED.last_modified,
+                            completed_datetime=NULL
+                            RETURNING *;
+                            """,
+                            (key, file_size, last_modified, ),
+                        )
+
+                        row = cursor.fetchone()
+                        logger.info(f"Inserted: {bucket}:{key}")
+            finally:
+                cursor.close()
+                ctx.close()
+
         except Exception as e:
             logger.error(f"Failed file insert: {event}: {e}")
     elif event.get("source") and event["source"] == "aws.events":
@@ -180,3 +196,38 @@ def cronhandler(event, context):
         logger.error(f"load pipeline failed: {e}")
 
     logger.info("done processing: %0.4f seconds", time() - start_time)
+
+
+
+# Keep seperate from above so we can test rows not from the database
+def load_measurements(rows):
+    logger.debug(f"loading {len(rows)} measurements")
+    start_time = time()
+    # get a client object to hold all the data
+    client = IngestClient()
+    # load all the keys
+    client.load_keys(rows)
+    # and finally we can dump it all into the db
+    client.dump()
+    # write to the log
+    logger.info("load_measurements:get: %s keys; %s measurements; %s locations; %0.4f seconds",
+                len(client.keys), len(client.measurements), len(client.nodes), time() - start_time)
+
+
+def load_measurements_pattern(
+        pattern = '^lcs-etl-pipeline/measures/.*\\.(csv|json)',
+        limit=10
+    ):
+    rows = get_logs_from_pattern(pattern, limit)
+    load_measurements(rows)
+    return len(rows)
+
+
+def load_measurements_db(
+    limit=250,
+    ascending: bool = False,
+    pattern = '^lcs-etl-pipeline/measures/.*\\.(csv|json)'
+    ):
+    rows = load_fetchlogs(pattern, limit, ascending)
+    load_measurements(rows)
+    return len(rows)

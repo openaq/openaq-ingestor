@@ -16,6 +16,7 @@ import psycopg2
 import typer
 from io import StringIO
 from .settings import settings
+from .resources import Resources
 from .utils import (
     get_query,
     clean_csv_value,
@@ -25,10 +26,9 @@ from .utils import (
     load_fetchlogs,
     get_object,
     get_file,
+    write_csv,
+    load_fail,
 )
-
-s3 = boto3.resource("s3")
-s3c = boto3.client("s3")
 
 app = typer.Typer()
 dir_path = os.path.dirname(os.path.realpath(__file__))
@@ -45,6 +45,9 @@ warnings.filterwarnings(
 
 def to_geometry(key, data):
     # could be passed as lat/lng or coordinates
+    # initialize for later checks
+    lat = lon = None
+
     if key == 'coordinates':
         data = data.get(key)
 
@@ -63,7 +66,6 @@ def to_geometry(key, data):
     if None in [lat, lon]:
         raise Exception('Missing value for coordinates')
 
-    # could add more checks
     return f"SRID={srid};POINT({lon} {lat})"
 
 def to_timestamp(key, data):
@@ -85,7 +87,6 @@ def to_timestamp(key, data):
             dt = datetime.fromtimestamp(int(dt), timezone.utc)
     else:
         return dt
-        dt = dateparser.parse(dt).replace(tzinfo=timezone.utc)
 
     return dt.isoformat()
 
@@ -103,7 +104,7 @@ def to_nodeid(key, data):
 
 class IngestClient:
     def __init__(
-        self, key=None, fetchlogs_id=None, data=None
+        self, key=None, fetchlogs_id=None, resources=None
     ):
         self.key = key
         self.fetchlogs_id = fetchlogs_id
@@ -119,6 +120,15 @@ class IngestClient:
         self.measurements = []
         self.matching_method = 'ingest-id'
         self.source = None
+
+        # Resource management via resources
+        if resources:
+            self.resources = resources
+            self._owns_resources = False
+        else:
+            self.resources = Resources()
+            self._owns_resources = True
+
         self.node_map = {
             "fetchlogs_id": {},
             "site_name": { "col":"site_name" },
@@ -150,12 +160,27 @@ class IngestClient:
             "lon": {},
             "key":{"col": "ingest_id"},
             }
-        # if fetchlogs_id but no key or data
-        # get key
-        # if key, load data
-        # if data
-        if data is not None and isinstance(data, dict):
-            self.load(data)
+
+
+    def get_connection(self, autocommit: bool = True):
+      """Get database connection via resources."""
+      return self.resources.get_connection(autocommit=autocommit)
+
+    @property
+    def connection(self):
+      """Get connection from resources."""
+      return self.resources._connection
+
+    def close(self):
+      """Close resources if we own it."""
+      if self._owns_resources:
+          self.resources.close()
+
+    def commit(self):
+      """Commit resources if we own it."""
+      if self._owns_resources:
+          self.resources.commit()
+
 
     def process(self, key, data, mp):
         col = None
@@ -191,161 +216,158 @@ class IngestClient:
         """
         db_table = "TEMP TABLE" if (settings.USE_TEMP_TABLES and load) else "TABLE"
         logger.debug(f"Dumping {len(self.nodes)} nodes using {db_table} ({settings.USE_TEMP_TABLES}|{load})")
-        with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-            connection.set_session(autocommit=True)
-            with connection.cursor() as cursor:
-                start_time = time()
+        connection = self.get_connection(True)
+        with connection.cursor() as cursor:
+            start_time = time()
+            cursor.execute(get_query(
+                "temp_locations_dump.sql",
+                table=db_table
+            ))
 
-                cursor.execute(get_query(
-                    "temp_locations_dump.sql",
-                    table=db_table
-                ))
+            write_csv(
+                cursor,
+                self.keys,
+                f"staging_keys",
+                [
+                    "key",
+                    "last_modified",
+                    "fetchlogs_id",
+                ],
+            )
+            # update by id instead of key due to matching issue
+            cursor.execute(
+                """
+                UPDATE fetchlogs
+                SET loaded_datetime = clock_timestamp()
+                , last_message = 'load_data'
+                WHERE fetchlogs_id IN (SELECT fetchlogs_id FROM staging_keys)
+                """
+            )
 
-                write_csv(
-                    cursor,
-                    self.keys,
-                    f"staging_keys",
-                    [
-                        "key",
-                        "last_modified",
-                        "fetchlogs_id",
-                    ],
-                )
-                # update by id instead of key due to matching issue
-                cursor.execute(
-                    """
-                    UPDATE fetchlogs
-                    SET loaded_datetime = clock_timestamp()
-                    , last_message = 'load_data'
-                    WHERE fetchlogs_id IN (SELECT fetchlogs_id FROM staging_keys)
-                    """
-                )
-                connection.commit()
+            logger.debug(f"Adding {len(self.nodes)} nodes to staging")
+            write_csv(
+                cursor,
+                self.nodes,
+                "staging_sensornodes",
+                [
+                    "ingest_id",
+                    "site_name",
+                    "matching_method",
+                    "source_name",
+                    "source_id",
+                    "ismobile",
+                    "geom",
+                    "metadata",
+                    "fetchlogs_id",
+                ],
+            )
 
-                write_csv(
-                    cursor,
-                    self.nodes,
-                    "staging_sensornodes",
-                    [
-                        "ingest_id",
-                        "site_name",
-                        "matching_method",
-                        "source_name",
-                        "source_id",
-                        "ismobile",
-                        "geom",
-                        "metadata",
-                        "fetchlogs_id",
-                    ],
-                )
+            logger.debug(f"Adding {len(self.systems)} systems to staging")
+            write_csv(
+                cursor,
+                self.systems,
+                "staging_sensorsystems",
+                [
+                    "ingest_id",
+                    "instrument_ingest_id",
+                    "ingest_sensor_nodes_id",
+                    "metadata",
+                    "fetchlogs_id",
+                ],
+            )
 
-                write_csv(
-                    cursor,
-                    self.systems,
-                    "staging_sensorsystems",
-                    [
-                        "ingest_id",
-                        "instrument_ingest_id",
-                        "ingest_sensor_nodes_id",
-                        "metadata",
-                        "fetchlogs_id",
-                    ],
-                )
+            logger.debug(f"Adding {len(self.sensors)} sensors to staging")
+            write_csv(
+                cursor,
+                self.sensors,
+                "staging_sensors",
+                [
+                    "ingest_id",
+                    "ingest_sensor_systems_id",
+                    "measurand",
+                    "units",
+                    "status",
+                    "logging_interval_seconds",
+                    "averaging_interval_seconds",
+                    "metadata",
+                    "fetchlogs_id",
+                ],
+            )
 
-                write_csv(
-                    cursor,
-                    self.sensors,
-                    "staging_sensors",
-                    [
-                        "ingest_id",
-                        "ingest_sensor_systems_id",
-                        "measurand",
-                        "units",
-                        "status",
-                        "logging_interval_seconds",
-                        "averaging_interval_seconds",
-                        "metadata",
-                        "fetchlogs_id",
-                    ],
-                )
+            logger.debug(f"Adding {len(self.flags)} flags to staging")
+            write_csv(
+                cursor,
+                self.flags,
+                "staging_flags",
+                [
+                    "ingest_id",
+                    "sensor_ingest_id",
+                    "datetime_from",
+                    "datetime_to",
+                    "note",
+                    "metadata",
+                    "fetchlogs_id",
+                ],
+            )
 
-                write_csv(
-                    cursor,
-                    self.flags,
-                    "staging_flags",
-                    [
-                        "ingest_id",
-                        "sensor_ingest_id",
-                        "datetime_from",
-                        "datetime_to",
-                        "note",
-                        "metadata",
-                        "fetchlogs_id",
-                    ],
-                )
+            # and now we load all the nodes,systems and sensors
+            if load:
+                query = get_query("etl_process_nodes.sql")
+                cursor.execute(query)
 
-                connection.commit()
+            for notice in connection.notices:
+                logger.debug(f"etl_process_nodes {notice.rstrip()}")
 
-                # and now we load all the nodes,systems and sensors
-                if load:
-                    query = get_query("etl_process_nodes.sql")
-                    cursor.execute(query)
+            cursor.execute(
+                """
+                UPDATE fetchlogs
+                SET completed_datetime = clock_timestamp()
+                , last_message = NULL
+                WHERE fetchlogs_id IN (SELECT fetchlogs_id FROM staging_keys)
+                """
+            )
 
-                for notice in connection.notices:
-                    logger.debug(notice)
+            logger.info("dump_locations: locations: %s; time: %0.4f, %s fetchlog(s)", len(self.nodes), time() - start_time, cursor.rowcount)
 
-                cursor.execute(
-                    """
-                    UPDATE fetchlogs
-                    SET completed_datetime = clock_timestamp()
-                    , last_message = NULL
-                    WHERE fetchlogs_id IN (SELECT fetchlogs_id FROM staging_keys)
-                    """
-                )
-
-                connection.commit()
-                logger.info("dump_locations: locations: %s; time: %0.4f", len(self.nodes), time() - start_time)
-                for notice in connection.notices:
-                    logger.debug(notice)
+        self.close()
 
 
 
     def dump_measurements(self, load: bool = True):
         db_table = "TEMP TABLE" if (settings.USE_TEMP_TABLES and load) else "TABLE"
         logger.debug(f"Dumping {len(self.measurements)} measurements using {db_table} ({settings.USE_TEMP_TABLES}|{load})")
-        with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-            connection.set_session(autocommit=True)
-            with connection.cursor() as cursor:
-                start_time = time()
+        connection = self.get_connection(True)
 
-                cursor.execute(get_query(
-                    "temp_measurements_dump.sql",
-                    table=db_table
-                ))
+        with connection.cursor() as cursor:
+            start_time = time()
 
-                iterator = StringIteratorIO(
-                    (to_tsv(line) for line in self.measurements)
-                )
-                cursor.copy_expert(
-                    """
-                    COPY staging_measurements (ingest_id, source_name, source_id, measurand, value, datetime, lon, lat, fetchlogs_id)
-                    FROM stdin;
-                    """,
-                    iterator,
-                )
+            cursor.execute(get_query(
+                "temp_measurements_dump.sql",
+                table=db_table
+            ))
 
-                if load:
-                    logger.info(f'processing {len(self.measurements)} measurements');
-                    query = get_query("etl_process_measurements.sql")
-                    try:
-                        cursor.execute(query)
-                        connection.commit()
-                        logger.info("dump_measurements: measurements: %s; time: %0.4f", len(self.measurements), time() - start_time)
-                        for notice in connection.notices:
-                            logger.debug(notice)
+            iterator = StringIteratorIO(
+                ("\t".join(map(clean_csv_value, line)) + "\n" for line in self.measurements)
+            )
+            cursor.copy_expert(
+                """
+                COPY staging_measurements (ingest_id, source_name, source_id, measurand, value, datetime, lon, lat, fetchlogs_id)
+                FROM stdin;
+                """,
+                iterator,
+            )
 
-                    except Exception as err:
-                        logger.error(err)
+            if load:
+                logger.info(f'processing {len(self.measurements)} measurements');
+                query = get_query("etl_process_measurements.sql")
+
+                cursor.execute(query)
+                logger.info("dump_measurements: measurements: %s; time: %0.4f", len(self.measurements), time() - start_time)
+
+                for notice in connection.notices:
+                    logger.debug(f"etl_process_measurements {notice.rstrip()}")
+
+        self.close()
 
 
     def load(self, data = {}):
@@ -360,22 +382,22 @@ class IngestClient:
             self.load_measurements(data.get('measures'))
 
 
-    def reset(self):
-        """
-        Reset the client to the new state. Mostly for testing purposes
-        """
-        logger.debug("Reseting the client data")
-        self.measurements = []
-        self.nodes = []
-        self.systems = []
-        self.sensors = []
-        self.flags = []
-        self.keys = []
-        self.key = None
-        self.fetchlogs_id = None
-        self.node_ids = []
-        self.system_ids = []
-        self.sensor_ids = []
+    # def reset(self):
+    #     """
+    #     Reset the client to the new state. Mostly for testing purposes
+    #     """
+    #     logger.debug("Reseting the client data")
+    #     self.measurements = []
+    #     self.nodes = []
+    #     self.systems = []
+    #     self.sensors = []
+    #     self.flags = []
+    #     self.keys = []
+    #     self.key = None
+    #     self.fetchlogs_id = None
+    #     self.node_ids = []
+    #     self.system_ids = []
+    #     self.sensor_ids = []
 
 
     def load_keys(self, rows):
@@ -387,7 +409,9 @@ class IngestClient:
             try:
                 self.load_key(key, fetchlogs_id, last_modified)
             except Exception as e:
-                submit_file_error(key, e);
+                with self.get_connection(True).cursor() as cursor:
+                    load_fail(cursor, fetchlogs_id, e);
+
 
     def load_key(self, key, fetchlogs_id, last_modified):
         logger.debug(f"Loading key: {fetchlogs_id}//:{key}")
@@ -398,7 +422,7 @@ class IngestClient:
 
         # is it a local file? This is used for dev
         # but likely fine to leave in
-        logger.info(os.path.expanduser(key))
+        # logger.debug(os.path.expanduser(key))
         if os.path.exists(os.path.expanduser(key)):
             content = get_file(os.path.expanduser(key)).read()
         else:
@@ -426,7 +450,7 @@ class IngestClient:
             data = orjson.loads(content)
             self.load(data)
         else:
-            raise Exception('No idea what to do')
+            raise Exception('Not sure how to read file')
 
         # add the key to the table to update
         self.keys.append({"key": key, "last_modified": last_modified, "fetchlogs_id": fetchlogs_id})
@@ -473,7 +497,7 @@ class IngestClient:
 
             sensor["ingest_id"] = id
 
-            logger.debug(f'Adding sensor {s}')
+            logger.debug(f"Adding sensor {s.get('key')}")
             for key, value in s.items():
                 key = str.replace(key, "sensor_", "")
                 if key == "flags":
@@ -683,17 +707,17 @@ class IngestClient:
         Refresh the cached tables that we use for most production endpoints.
         Right now this is just for testing purposes
         """
-        with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-            connection.set_session(autocommit=True)
-            with connection.cursor() as cursor:
-                logger.debug("Refreshing the cached tables")
-                cursor.execute("REFRESH MATERIALIZED VIEW locations_view_cached;")
-                cursor.execute("REFRESH MATERIALIZED VIEW locations_manufacturers_cached;")
-                cursor.execute("REFRESH MATERIALIZED VIEW locations_latest_measurements_cached;")
-                cursor.execute("REFRESH MATERIALIZED VIEW providers_view_cached;")
-                cursor.execute("REFRESH MATERIALIZED VIEW countries_view_cached;")
-                cursor.execute("REFRESH MATERIALIZED VIEW parameters_view_cached;")
+        connection = self.get_connection(True)
+        with connection.cursor() as cursor:
+            logger.debug("Refreshing the cached tables")
+            cursor.execute("REFRESH MATERIALIZED VIEW locations_view_cached;")
+            cursor.execute("REFRESH MATERIALIZED VIEW locations_manufacturers_cached;")
+            cursor.execute("REFRESH MATERIALIZED VIEW locations_latest_measurements_cached;")
+            cursor.execute("REFRESH MATERIALIZED VIEW providers_view_cached;")
+            cursor.execute("REFRESH MATERIALIZED VIEW countries_view_cached;")
+            cursor.execute("REFRESH MATERIALIZED VIEW parameters_view_cached;")
 
+        self.close()
 
 
     def process_hourly_data(self,n: int = 1000):
@@ -701,14 +725,14 @@ class IngestClient:
         Process any pending hourly data rollups.
         Right now this is just for testing purposes
         """
-        with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-            connection.set_session(autocommit=True)
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT datetime, tz_offset FROM fetch_hourly_data_jobs(%s)", (n,))
-                rows = cursor.fetchall()
-                for row in rows:
-                    cursor.execute("SELECT update_hourly_data(%s, %s)", row)
-                    connection.commit()
+        connection = self.get_connection(True)
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT datetime, tz_offset FROM fetch_hourly_data_jobs(%s)", (n,))
+            rows = cursor.fetchall()
+            for row in rows:
+                cursor.execute("SELECT update_hourly_data(%s, %s)", row)
+
+        self.close()
 
 
     def process_daily_data(self,n: int = 500):
@@ -716,14 +740,14 @@ class IngestClient:
         Process any pending daily data rollups.
         Right now this is just for testing purposes
         """
-        with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-            connection.set_session(autocommit=True)
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT datetime, tz_offset FROM fetch_daily_data_jobs(%s)", (n,))
-                rows = cursor.fetchall()
-                for row in rows:
-                    cursor.execute("SELECT update_daily_data(%s, %s)", row)
-                    connection.commit()
+        connection = self.get_connection(True)
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT datetime, tz_offset FROM fetch_daily_data_jobs(%s)", (n,))
+            rows = cursor.fetchall()
+            for row in rows:
+                cursor.execute("SELECT update_daily_data(%s, %s)", row)
+
+        self.close()
 
 
     def process_annual_data(self,n: int = 25):
@@ -731,14 +755,14 @@ class IngestClient:
         Process any pending annual data rollups.
         Right now this is just for testing purposes
         """
-        with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-            connection.set_session(autocommit=True)
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT datetime, tz_offset FROM fetch_annual_data_jobs(%s)", (n,))
-                rows = cursor.fetchall()
-                for row in rows:
-                    cursor.execute("SELECT update_annual_data(%s, %s)", row)
-                    connection.commit()
+        connection = self.get_connection(True)
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT datetime, tz_offset FROM fetch_annual_data_jobs(%s)", (n,))
+            rows = cursor.fetchall()
+            for row in rows:
+                cursor.execute("SELECT update_annual_data(%s, %s)", row)
+
+        self.close()
 
 
     def get_metadata(self):
@@ -768,280 +792,7 @@ class IngestClient:
             logger.debug(f"get_metadata:hasnew - {self.keys}")
             self.load_data()
 
-def create_staging_table(cursor):
-	# table and batch are used primarily for testing
-	cursor.execute(get_query(
-		"etl_staging_v2.sql",
-		table="TEMP TABLE" if settings.USE_TEMP_TABLES else 'TABLE'
-	))
 
-def write_csv(cursor, data, table, columns):
-    logger.debug(f"table: {table}")
-    fields = ",".join(columns)
-    sio = StringIO()
-    writer = csv.DictWriter(sio, columns)
-    writer.writerows(data)
-    sio.seek(0)
-    cursor.copy_expert(
-        f"""
-        copy {table} ({fields}) from stdin with csv;
-        """,
-        sio,
-    )
-    logger.debug(f"table: {table}; cursor rowcount: {cursor.rowcount}")
-
-
-
-
-def load_metadata_bucketscan(count=100):
-    paginator = s3c.get_paginator("list_objects_v2")
-    for page in paginator.paginate(
-        Bucket=FETCH_BUCKET,
-        Prefix="lcs-etl-pipeline/stations",
-        PaginationConfig={"PageSize": count},
-    ):
-        try:
-            contents = page["Contents"]
-            data = LCSData(contents)
-            data.get_metadata()
-        except KeyError:
-            break
-
-
-def load_metadata_db(limit=250, ascending: bool = False):
-    order = 'ASC' if ascending else 'DESC'
-    pattern = 'lcs-etl-pipeline/stations/'
-    rows = load_fetchlogs(pattern, limit, ascending)
-    contents = []
-    for row in rows:
-        logger.debug(row)
-        contents.append(
-            {
-                "Key": unquote_plus(row[1]),
-                "LastModified": row[2],
-                "id": row[0],
-            }
-        )
-    if len(contents) > 0:
-        load_metadata(contents)
-        # data = LCSData(contents)
-        # data.get_metadata()
-    return len(rows)
-
-
-def load_metadata_batch(batch: str):
-    with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-        connection.set_session(autocommit=True)
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT key
-                , last_modified
-                , fetchlogs_id
-                FROM fetchlogs
-                WHERE batch_uuid = %s
-                """,
-                (batch,),
-            )
-            rows = cursor.fetchall()
-            rowcount = cursor.rowcount
-            contents = []
-            for row in rows:
-                contents.append(
-                    {
-                        "Key": unquote_plus(row[0]),
-                        "LastModified": row[1],
-                        "id": row[2],
-                    }
-                )
-            for notice in connection.notices:
-                logger.debug(notice)
-    if len(contents) > 0:
-        load_metadata(contents)
-        # data = LCSData(contents)
-        # data.get_metadata()
-    return rowcount
-
-
-def load_metadata(keys):
-    logger.debug(f'Load metadata: {len(keys)}')
-    data = LCSData(keys)
-    try:
-        data.get_metadata()
-    except Exception as e:
-        ids = ','.join([str(k['id']) for k in keys])
-        logger.error(f'load error: {e} ids: {ids}')
-        raise
-
-
-def get_measurements(key, fetchlogsId):
-    start = time()
-    content = get_object(key)
-    fetch_time = time() - start
-
-    ret = []
-    start = time()
-    for row in csv.reader(content.split("\n")):
-        if len(row) not in [3, 5]:
-            continue
-        if len(row) == 5:
-            try:
-                lon = float(row[3])
-                lat = float(row[4])
-                if not (
-                    lon is None
-                    or lat is None
-                    or lat == ""
-                    or lon == ""
-                    or lon == 0
-                    or lat == 0
-                    or lon < -180
-                    or lon > 180
-                    or lat < -90
-                    or lat > 90
-                ):
-                    row[3] = lon
-                    row[4] = lat
-                else:
-                    row[3] = None
-                    row[4] = None
-            except Exception:
-                row[3] = None
-                row[4] = None
-        else:
-            row.insert(3, None)
-            row.insert(4, None)
-        if row[0] == "" or row[0] is None:
-            continue
-        dt = row[2]
-
-        try:
-            if dt.isnumeric():
-                if len(dt) == 13:
-                    dt = datetime.fromtimestamp(int(dt)/1000.0, timezone.utc)
-                else:
-                    dt = datetime.fromtimestamp(int(dt), timezone.utc)
-                row[2] = dt.isoformat()
-        except Exception:
-            try:
-                dt = dateparser.parse(dt).replace(tzinfo=timezone.utc)
-            except Exception:
-                logger.warning(f"Exception in parsing date for {dt} {Exception}")
-
-        #row[2] = dt.isoformat()
-        # addd the log id for tracing purposes
-        row.insert(5, fetchlogsId)
-        ret.append(row)
-    logger.info("get_measurements:csv: %s; size: %s; rows: %s; fetching: %0.4f; reading: %0.4f", key, len(content)/1000, len(ret), fetch_time, time() - start)
-    return ret
-
-
-def submit_file_error(key, e):
-    """Update the log to reflect the error and prevent a retry"""
-    logger.error(f"{key}: {e}")
-    with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-        connection.set_session(autocommit=True)
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                UPDATE fetchlogs
-                SET completed_datetime = clock_timestamp()
-                , last_message = %s
-                , has_error = 't'
-                WHERE key = %s
-                """,
-                (f"ERROR: {e}", key),
-            )
-
-
-def to_tsv(row):
-    tsv = "\t".join(map(clean_csv_value, row)) + "\n"
-    return tsv
-    return ""
-
-
-def load_measurements_file(fetchlogs_id: int):
-    with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-        connection.set_session(autocommit=True)
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT fetchlogs_id
-                , key
-                FROM fetchlogs
-                WHERE fetchlogs_id = %s
-                LIMIT 1
-                ;
-                """,
-                (fetchlogs_id,),
-            )
-            rows = cursor.fetchall()
-            load_measurements(rows)
-
-def load_measurements_pattern(
-        pattern = '^lcs-etl-pipeline/measures/.*\\.(csv|json)',
-        limit=10
-    ):
-    rows = get_logs_from_pattern(pattern, limit)
-    load_measurements(rows)
-    return len(rows)
-
-def load_measurements_key(fetchlogKey: str):
-    with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-        connection.set_session(autocommit=True)
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT fetchlogs_id
-                , key
-                FROM fetchlogs
-                WHERE key = %s
-                LIMIT 1
-                ;
-                """,
-                (fetchlogKey,),
-            )
-            rows = cursor.fetchall()
-            load_measurements(rows)
-
-
-def load_measurements_batch(batch: str):
-    with psycopg2.connect(settings.DATABASE_WRITE_URL) as connection:
-        connection.set_session(autocommit=True)
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT fetchlogs_id
-                , key
-                FROM fetchlogs
-                WHERE batch_uuid = %s
-                """,
-                (batch,),
-            )
-            rows = cursor.fetchall()
-            load_measurements(rows)
-
-
-def load_measurements_db(
-    limit=250,
-    ascending: bool = False,
-    pattern = '^lcs-etl-pipeline/measures/.*\\.(csv|json)'
-    ):
-    rows = load_fetchlogs(pattern, limit, ascending)
-    load_measurements(rows)
-    return len(rows)
-
-
-# Keep seperate from above so we can test rows not from the database
-def load_measurements(rows):
-    logger.debug(f"loading {len(rows)} measurements")
-    start_time = time()
-    # get a client object to hold all the data
-    client = IngestClient()
-    # load all the keys
-    client.load_keys(rows)
-    # and finally we can dump it all into the db
-    client.dump()
-    # write to the log
-    logger.info("load_measurements:get: %s keys; %s measurements; %s locations; %0.4f seconds",
-                len(client.keys), len(client.measurements), len(client.nodes), time() - start_time)
+#################################################################################################
+############################## END OF IngestClient ##############################################
+#################################################################################################

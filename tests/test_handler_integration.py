@@ -2,6 +2,7 @@ import pytest
 from datetime import datetime, timezone
 from ingest.handler import handler, getKeysFromSnsRecord
 import json
+from unittest.mock import patch
 
 
 @pytest.mark.integration
@@ -16,8 +17,7 @@ class TestHandlerSNSEvents:
 
     def test_handler_sns_event_single_file(
         self,
-        db_cursor,
-        clean_fetchlogs,
+        ingest_resources,
         mock_s3_with_object,
         sample_sns_event,
         lambda_context
@@ -26,16 +26,16 @@ class TestHandlerSNSEvents:
         # Arrange
         s3_client, bucket, key, file_size, last_modified = mock_s3_with_object
 
-        # Act
-        handler(sample_sns_event, lambda_context)
+        # Act - pass ingest_resources to handler
+        handler(sample_sns_event, lambda_context, resources=ingest_resources)
 
         # Assert - verify record inserted
-        db_cursor.execute(
+        cursor = ingest_resources.cursor()
+        cursor.execute(
             "SELECT key, file_size, init_datetime, last_modified, completed_datetime FROM fetchlogs WHERE key = %s",
             (key,)
         )
-        result = db_cursor.fetchone()
-
+        result = cursor.fetchone()
 
         assert result is not None, f"No fetchlog record found for key: {key}"
         assert result[0] == key
@@ -43,12 +43,13 @@ class TestHandlerSNSEvents:
         assert result[2] is not None, f"No init_datetime created for file"
         assert result[3] is not None  # last_modified populated
         assert result[4] is None  # completed_datetime should be NULL
+        cursor.close()
 
     def test_handler_sns_event_batch(
         self,
+        ingest_resources,
         db_cursor,
         clean_fetchlogs,
-        mock_s3,
         sample_batch_sns_event,
         lambda_context
     ):
@@ -59,10 +60,10 @@ class TestHandlerSNSEvents:
         bucket = sns_message["Records"][0]["s3"]["bucket"]["name"]
         for i in range(5):
             key = f"lcs-etl-pipeline/test{i}.json"
-            mock_s3.put_object(Bucket=bucket, Key=key, Body=b'{}')
+            ingest_resources.s3.put_object(Bucket=bucket, Key=key, Body=b'{}')
 
-        # Act
-        handler(sample_batch_sns_event, lambda_context)
+        # Act - pass ingest_resources to handler
+        handler(sample_batch_sns_event, lambda_context, resources=ingest_resources)
 
         # Assert - verify 5 records inserted
         db_cursor.execute("SELECT COUNT(*) FROM fetchlogs")
@@ -76,9 +77,9 @@ class TestHandlerSNSEvents:
 
     def test_handler_sns_event_multiple_sns_records(
         self,
+        ingest_resources,
         db_cursor,
         clean_fetchlogs,
-        mock_s3,
         lambda_context
     ):
         """Test handler processes multiple SNS records (multiple S3 events)."""
@@ -89,7 +90,7 @@ class TestHandlerSNSEvents:
         }
         for i in range(3):
             key = f"lcs-etl-pipeline/test{i}.json"
-            mock_s3.put_object(Bucket=bucket, Key=key, Body=b'{}')
+            ingest_resources.s3.put_object(Bucket=bucket, Key=key, Body=b'{}')
 
             s3_message = {
                 "Records": [{
@@ -105,8 +106,8 @@ class TestHandlerSNSEvents:
                 "Sns": {"Message": json.dumps(s3_message)}
             })
 
-        # Act
-        handler(event, lambda_context)
+        # Act - pass ingest_resources to handler
+        handler(event, lambda_context, resources=ingest_resources)
 
         # Assert - verify 3 records inserted
         db_cursor.execute("SELECT COUNT(*) FROM fetchlogs")
@@ -115,6 +116,7 @@ class TestHandlerSNSEvents:
 
     def test_handler_duplicate_key_update(
         self,
+        ingest_resources,
         db_cursor,
         clean_fetchlogs,
         mock_s3_with_object,
@@ -128,10 +130,9 @@ class TestHandlerSNSEvents:
             INSERT INTO fetchlogs (key, last_modified, completed_datetime)
             VALUES (%s, %s, NOW())
         """, (key, datetime(2024, 1, 1, tzinfo=timezone.utc)))
-        db_cursor.connection.commit()
 
-        # Act - process same key again
-        handler(sample_sns_event, lambda_context)
+        # Act - process same key again, pass ingest_resources to handler
+        handler(sample_sns_event, lambda_context, resources=ingest_resources)
 
         # Assert - verify record updated, not duplicated
         db_cursor.execute("SELECT COUNT(*) FROM fetchlogs WHERE key = %s", (key,))
@@ -149,15 +150,15 @@ class TestHandlerSNSEvents:
 
     def test_handler_missing_s3_object(
         self,
+        ingest_resources,
         db_cursor,
         clean_fetchlogs,
-        mock_s3,  # Empty S3, no object uploaded
         sample_sns_event,
         lambda_context
     ):
         """Test handler handles missing S3 object gracefully."""
-        # Act - process event for non-existent object
-        handler(sample_sns_event, lambda_context)
+        # Act - process event for non-existent object, pass ingest_resources to handler
+        handler(sample_sns_event, lambda_context, resources=ingest_resources)
 
         # Assert - record still inserted but file_size is NULL
         key = "lcs-etl-pipeline/test.json"
@@ -181,6 +182,7 @@ class TestHandlerDirectS3Events:
 
     def test_handler_direct_s3_event_single_file(
         self,
+        ingest_resources,
         db_cursor,
         clean_fetchlogs,
         mock_s3_with_object,
@@ -191,8 +193,8 @@ class TestHandlerDirectS3Events:
         # Arrange
         s3_client, bucket, key, file_size, last_modified = mock_s3_with_object
 
-        # Act
-        handler(sample_s3_event, lambda_context)
+        # Act - pass ingest_resources to handler
+        handler(sample_s3_event, lambda_context, resources=ingest_resources)
 
         # Assert - verify record inserted
         db_cursor.execute(
@@ -209,9 +211,9 @@ class TestHandlerDirectS3Events:
 
     def test_handler_direct_s3_event_batch(
         self,
+        ingest_resources,
         db_cursor,
         clean_fetchlogs,
-        mock_s3,
         sample_batch_s3_event,
         lambda_context
     ):
@@ -220,10 +222,10 @@ class TestHandlerDirectS3Events:
         bucket = sample_batch_s3_event["Records"][0]["s3"]["bucket"]["name"]
         for i in range(5):
             key = f"lcs-etl-pipeline/test{i}.json"
-            mock_s3.put_object(Bucket=bucket, Key=key, Body=b'{}')
+            ingest_resources.s3.put_object(Bucket=bucket, Key=key, Body=b'{}')
 
-        # Act
-        handler(sample_batch_s3_event, lambda_context)
+        # Act - pass ingest_resources to handler
+        handler(sample_batch_s3_event, lambda_context, resources=ingest_resources)
 
         # Assert - verify 5 records inserted
         db_cursor.execute("SELECT COUNT(*) FROM fetchlogs")
@@ -237,6 +239,7 @@ class TestHandlerDirectS3Events:
 
     def test_handler_direct_s3_duplicate_key(
         self,
+        ingest_resources,
         db_cursor,
         clean_fetchlogs,
         mock_s3_with_object,
@@ -250,10 +253,9 @@ class TestHandlerDirectS3Events:
             INSERT INTO fetchlogs (key, last_modified, completed_datetime)
             VALUES (%s, %s, NOW())
         """, (key, datetime(2024, 1, 1, tzinfo=timezone.utc)))
-        db_cursor.connection.commit()
 
-        # Act - process same key again via direct S3 event
-        handler(sample_s3_event, lambda_context)
+        # Act - process same key again via direct S3 event, pass ingest_resources to handler
+        handler(sample_s3_event, lambda_context, resources=ingest_resources)
 
         # Assert - verify record updated, not duplicated
         db_cursor.execute("SELECT COUNT(*) FROM fetchlogs WHERE key = %s", (key,))
@@ -271,15 +273,15 @@ class TestHandlerDirectS3Events:
 
     def test_handler_direct_s3_missing_object(
         self,
+        ingest_resources,
         db_cursor,
         clean_fetchlogs,
-        mock_s3,  # Empty S3, no object uploaded
         sample_s3_event,
         lambda_context
     ):
         """Test handler handles missing S3 object gracefully (direct S3)."""
-        # Act - process direct S3 event for non-existent object
-        handler(sample_s3_event, lambda_context)
+        # Act - process direct S3 event for non-existent object, pass ingest_resources to handler
+        handler(sample_s3_event, lambda_context, resources=ingest_resources)
 
         # Assert - record still inserted but file_size is NULL
         key = "lcs-etl-pipeline/test.json"
@@ -290,6 +292,89 @@ class TestHandlerDirectS3Events:
         result = db_cursor.fetchone()
         assert result is not None, "Record should be inserted even if S3 object missing"
         assert result[1] is None, "file_size should be NULL for missing object"
+
+
+@pytest.mark.integration
+class TestCronhandlerIntegration:
+    """
+    Integration tests for cronhandler() function.
+
+    NOTE: These tests verify the EventBridge/CloudWatch Events triggered
+    cron processing path that orchestrates metadata, realtime, and pipeline loaders.
+    """
+
+    def test_handler_eventbridge_trigger(
+        self,
+        db_cursor,
+        clean_fetchlogs,
+        lambda_context
+    ):
+        """Test handler routes EventBridge event to cronhandler."""
+        # Arrange
+        eventbridge_event = {
+            "source": "aws.events",
+            "detail-type": "Scheduled Event",
+            "resources": ["arn:aws:events:us-east-1:123456789012:rule/test-rule"]
+        }
+
+        # Mock the loaders to avoid actually processing data
+        with patch('ingest.handler.load_metadata_db', return_value=0) as mock_metadata, \
+             patch('ingest.handler.load_db', return_value=0) as mock_realtime, \
+             patch('ingest.handler.load_measurements_db', return_value=0) as mock_pipeline:
+
+            # Act
+            handler(eventbridge_event, lambda_context)
+
+            # Assert - verify cronhandler was invoked (loaders were called)
+            mock_metadata.assert_called_once()
+            mock_realtime.assert_called_once()
+            mock_pipeline.assert_called_once()
+
+    def test_cronhandler_with_fetchlog_pattern(
+        self,
+        lambda_context
+    ):
+        """Test cronhandler processes specific fetchlogKey pattern."""
+        # Arrange
+        event = {
+            "source": "aws.events",
+            "fetchlogKey": "lcs-etl-pipeline/test%.json",
+            "limit": 5
+        }
+
+        # Mock the pattern loader
+        with patch('ingest.handler.load_measurements_pattern') as mock_pattern:
+            mock_pattern.return_value = {"processed": 3}
+
+            # Act
+            result = handler(event, lambda_context)
+
+            # Assert
+            # Note: handler() calls cronhandler() which returns the result
+            # handler() itself doesn't return anything, so we just verify the call
+            mock_pattern.assert_called_once_with(limit=5, pattern="lcs-etl-pipeline/test%.json")
+
+    def test_cronhandler_respects_pause_setting(
+        self,
+        lambda_context
+    ):
+        """Test cronhandler respects PAUSE_INGESTING setting."""
+        # Arrange
+        event = {
+            "source": "aws.events",
+            "detail-type": "Scheduled Event"
+        }
+
+        # Mock settings to pause ingesting
+        with patch('ingest.handler.settings') as mock_settings, \
+             patch('ingest.handler.load_metadata_db') as mock_metadata:
+            mock_settings.PAUSE_INGESTING = True
+
+            # Act
+            handler(event, lambda_context)
+
+            # Assert - loader should not be called when paused
+            mock_metadata.assert_not_called()
 
 
 @pytest.mark.integration

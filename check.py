@@ -1,272 +1,302 @@
+#!/usr/bin/env python
+"""
+Load files from S3 or local filesystem into database.
+
+Supports multiple operational modes:
+- Default: Full load with ETL processing
+- --download: Download file locally without DB operations
+- --preview: Show file contents without DB changes
+- --stage-only: Load to staging tables, skip ETL
+- --test: Full workflow with verification and rollback
+"""
+
 import argparse
 import logging
 import os
 import sys
-import orjson
+from pathlib import Path
 import psycopg2
 
-logger = logging.getLogger('check.py')
-
-#os.chdir('/home/christian/git/caparker/openaq-ingestor/ingest')
-#print(os.getcwd())
-
-parser = argparse.ArgumentParser(
-    description="""
-    Do some basic checking against the database.
-    Requires an env file with the basic database variables,
-    the same that you would need to deploy.
-    """)
-parser.add_argument('--id', type=int, required=False,
-                    help='The fetchlogs_id value')
-parser.add_argument('--file', type=str, required=False,
-                    help='A local file to load')
-parser.add_argument('--batch', type=str, required=False,
-                    help='The batch id value. Loads files based on batch uuid.')
-parser.add_argument('--pattern', type=str, required=False,
-                    help='A reqex to match keys for loading')
-parser.add_argument('--env', type=str, required=False,
-                    help='The dot env file to use')
-parser.add_argument('--profile', type=str, required=False,
-                    help='The AWS profile to use')
-parser.add_argument('--n', type=int, required=False, default=30,
-                    help="""Either the number of entries to list
-                    (sorted by date) or the number of days to go
-                    back if using the summary or rejects arguments""")
-parser.add_argument('--pipeline', type=int, required=False, default=0,
-                    help="""The number of pipeline files to load at a time""")
-parser.add_argument('--metadata', type=int, required=False, default=0,
-                    help="""The number of metadata files to load at a time""")
-parser.add_argument('--realtime', type=int, required=False, default=0,
-                    help="""The number of realtime files to load at a time""")
-parser.add_argument('--fix', action="store_true",
-                    help='Automatically attempt to fix the problem')
-parser.add_argument('--load', action="store_true",
-                    help='Attempt to load the file manually, outside the queue')
-parser.add_argument('--download', action="store_true",
-                    help='Attempt to download the file')
-parser.add_argument('--dryrun', action="store_true",
-                    help='Check to see if its fixable but dont actually save it')
-parser.add_argument('--debug', action="store_true",
-                    help='Output at DEBUG level')
-parser.add_argument('--summary', action="store_true",
-                    help='Summarize the fetchlog errors by type')
-parser.add_argument('--rejects', action="store_true",
-                    help='Show summary of the rejects errors')
-parser.add_argument('--errors', action="store_true",
-                    help='Show list of errors')
-parser.add_argument('--resubmit', action="store_true",
-                    help='Mark the fetchlogs file for resubmittal')
-parser.add_argument('--keep', action="store_true",
-                    help='Do not use TEMP tables for the ingest staging tables')
-args = parser.parse_args()
-
-if 'DOTENV' not in os.environ.keys() and args.env is not None:
-    os.environ['DOTENV'] = args.env
-
-if 'AWS_PROFILE' not in os.environ.keys() and args.profile is not None:
-    os.environ['AWS_PROFILE'] = args.profile
-
-if args.dryrun:
-    os.environ['DRYRUN'] = 'True'
-
-if args.debug:
-    os.environ['LOG_LEVEL'] = 'DEBUG'
-
-if args.keep:
-    os.environ['USE_TEMP_TABLES'] = 'False'
-
-from botocore.exceptions import ClientError
-from ingest.handler import cronhandler
-from ingest.settings import settings
-
-from ingest.lcs import (
-    load_metadata,
-    load_metadata_batch,
-)
-
-from ingest.lcsV2 import (
-    load_measurements,
-    load_measurements_batch,
-)
-
-from ingest.fetch import (
-    load_realtime,
-    create_staging_table,
-    parse_json,
-)
-
-from ingest.utils import (
-    load_fetchlogs,
-    load_errors_list,
-    load_errors_summary,
-    load_rejects_summary,
-    get_data,
-    get_object,
-    put_object,
-    get_logs_from_ids,
-    get_logs_from_pattern,
-    mark_success,
-    StringIteratorIO,
-    deconstruct_path,
-)
+from ingest.lcsV2 import IngestClient
+from ingest.resources import Resources
+from ingest.utils import deconstruct_path, get_object
 
 
-def check_realtime_key(key: str, fix: bool = False):
-    """Check realtime file for common errors"""
-    logger.debug(f"\n## Checking realtime for issues: {key}")
-    # get text of object
-    try:
-        txt = get_object(key)
-    except Exception as e:
-        # these errors are not fixable so return
-        logger.error(f"\t*** Error getting file: {e}")
-        return;
-    # break into lines
-    lines = txt.split("\n")
-    # check parse for each line
-    n = len(lines)
-    errors = []
-    for jdx, line in enumerate(lines):
-        if len(line) > 0:
-            try:
-                # first just try and load it
-                obj = orjson.loads(line)
-            except Exception as e:
-                errors.append(jdx)
-                print(f"*** Loading error on line #{jdx} (of {n}): {e}\n{line}")
-            try:
-                # then we can try to parse it
-                parse_json(obj)
-            except Exception as e:
-                errors.append(jdx)
-                print(f"*** Parsing error on line #{jdx} (of {n}): {e}\n{line}")
-
-    if len(errors) > 0 and fix:
-        # remove the bad rows and then replace the file
-        nlines = [l for i, l in enumerate(lines) if i not in errors]
-        message = f"Fixed: removed {len(errors)} and now have {len(nlines)} lines"
-        print(message)
-        ntext = "\n".join(nlines)
-        put_object(
-            data=ntext,
-            key=key
-        )
-        mark_success(key=key, reset=True, message=message)
-    elif len(errors) == 0 and fix:
-        mark_success(key=key, reset=True)
-
-
-if args.file is not None:
-    # check if the files exists
-    # is it a realtime file or a lcs file?
-    # upload the file
-    load_realtime([
-        (-1, args.file, None)
-    ])
-    sys.exit()
-
-# If we have passed an id than we check that
-if args.id is not None:
-    # get the details for that id
-    logs = get_logs_from_ids(ids=[args.id])
-    # get just the keys
-    keys = [log[1] for log in logs]
-    # loop through and check each
-    logger.info(f"Downloading {len(keys)} files")
-    for idx, key in enumerate(keys):
-        if args.download:
-            # we may be using the new source pat
-            p = deconstruct_path(key)
-            download_path = f'~/Downloads/{p["bucket"]}/{p["key"]}';
-            logger.info(f'downloading to {download_path}')
-            txt = get_object(**p)
-            fpath = os.path.expanduser(download_path)
-            os.makedirs(os.path.dirname(fpath), exist_ok=True)
-            with open(fpath.replace('.gz', ''), 'w') as f:
-                f.write(txt)
-        # if we are resubmiting we dont care
-        # what type of file it is
-        elif args.resubmit:
-            mark_success(key, reset=True, message='resubmitting')
-        # figure out what type of file it is
-        elif 'realtime' in key:
-            if args.load:
-                load_realtime([
-                    (args.id, key, None)
-                ])
-            else:
-                check_realtime_key(key, args.fix)
-        elif 'stations' in key:
-            load_metadata([
-                {"id": args.id, "Key": key, "LastModified": None}
-            ])
+def download_from_location(path: dict, output_path=None):
+    """Download file from S3 to local filesystem."""
+    if path.get('location') == 's3':
+        bucket = path.get('bucket')
+        key = path.get('key')
+        content = get_object(key=key, bucket=bucket)
+        if output_path:
+            download_path = Path(output_path) / key
         else:
-            load_measurements([
-                (args.id, key, None)
-            ])
+            download_path = Path.home() / 'Downloads/openaq-ingestor' / key
 
-elif args.batch is not None:
-    # load_measurements_batch(args.batch)
-    load_metadata_batch(args.batch)
+        # Make sure the directories exist
+        download_path.parent.mkdir(parents=True, exist_ok=True)
+        # Write file (remove .gz from name since get_object decompresses)
+        output_file = str(download_path).replace('.gz', '')
+        with open(output_file, 'w') as f:
+            f.write(content)
+        ## write out some details
+        print(f"✓ Downloaded to: {output_file}")
+        print(f"  Size: {len(content)} characters")
+        path = deconstruct_path(output_file)
+    elif path.get('location') == 'local':
+        print(f"✗ Key appears to be a local file: {path}")
+    elif path.get('location') is None:
+        print(f"x Could not determine the location of that key")
+        sys.exit(1)
+    else:
+        print(f"x Key appears to be in a location that does not support download - {path.get('location')}")
 
-elif args.pattern is not None:
-        keys = load_fetchlogs(pattern=args.pattern, limit=25, ascending=True)
-    # loop through and check each
-        for row in keys:
-                id = row[0]
-                key = row[1]
-                last = row[2]
-                logger.debug(f"{key}: {id}")
-                if args.load:
-                        if 'realtime' in key:
-                                load_realtime([
-                    (id, key, last)
-                                                          ])
-                        elif 'stations' in key:
-                                load_metadata([
-                                        {"id": id, "Key": key, "LastModified": last}
-                                ])
-                        else:
-                                load_measurements([
-                                        (id, key, last)
-                                ])
+    return path
+
+def print_header(header: str):
+        print("\n" + "="*60)
+        print(f"===  {header}")
+        print("="*60)
+
+def print_staging_summary(connection, id: int = -1):
+    with connection.cursor() as cursor:
+        # Staging counts
+        print_header("Staging summary")
+        cursor.execute("SELECT COUNT(*) FROM staging_sensornodes")
+        staging_nodes = cursor.fetchone()[0]
+        print(f"   • Staging nodes: {staging_nodes}")
+
+        cursor.execute("SELECT COUNT(*) FROM staging_sensorsystems")
+        staging_systems = cursor.fetchone()[0]
+        print(f"   • Staging systems: {staging_systems}")
+
+        cursor.execute("SELECT COUNT(*) FROM staging_sensors")
+        staging_sensors = cursor.fetchone()[0]
+        print(f"   • Staging sensors: {staging_sensors}")
+
+        cursor.execute("SELECT COUNT(*) FROM staging_measurements")
+        staging_measurements = cursor.fetchone()[0]
+        print(f"   • Staging measurements: {staging_measurements}")
+
+        # Check matched nodes
+        cursor.execute("""
+            SELECT COUNT(*) FROM staging_sensornodes
+            WHERE sensor_nodes_id IS NOT NULL
+        """)
+        matched_nodes = cursor.fetchone()[0]
+        print(f"   • Matched existing nodes: {matched_nodes}/{staging_nodes}")
+
+        # Check measurements date range
+        cursor.execute("""
+            SELECT MIN(datetime), MAX(datetime)
+            FROM staging_measurements
+        """)
+        date_range = cursor.fetchone()
+        if date_range[0]:
+            print(f"   • Staging measurement date range: {date_range[0]} to {date_range[1]}")
+
+        # Check for rejects
+        cursor.execute("""
+            SELECT COUNT(*) FROM rejects
+            WHERE fetchlogs_id = %s
+        """, (id,))
+        rejects = cursor.fetchone()[0]
+        if rejects > 0:
+            print(f"   ⚠ Rejected records: {rejects}")
+
+
+def print_current_data_summary(connection):
+    with connection.cursor() as cursor:
+        # Current counts
+        print_header("Current data summary")
+        cursor.execute("SELECT COUNT(*) FROM sensor_nodes")
+        nodes = cursor.fetchone()[0]
+        print(f"   • Sensor nodes: {nodes}")
+
+        cursor.execute("SELECT COUNT(*) FROM sensor_systems")
+        systems = cursor.fetchone()[0]
+        print(f"   • Sensor systems: {systems}")
+
+        cursor.execute("SELECT COUNT(*) FROM sensors")
+        sensors = cursor.fetchone()[0]
+        print(f"   • Sensors: {sensors}")
+
+        cursor.execute("SELECT COUNT(*) FROM measurements")
+        measurements = cursor.fetchone()[0]
+        print(f"   • Measurements: {measurements}")
+
+        # Check measurements date range
+        cursor.execute("""
+            SELECT MIN(datetime), MAX(datetime)
+            FROM measurements
+        """)
+        date_range = cursor.fetchone()
+        if date_range[0]:
+            print(f"   • Measurement date range: {date_range[0]} to {date_range[1]}")
+
+
+
+def print_client_summary(client: IngestClient):
+    print_header("Client summary")
+
+    print(f"\nNodes (locations): {len(client.nodes)}")
+    if client.nodes:
+        print("\nSample Nodes:")
+        for node in client.nodes[:5]:
+            site_name = node.get('site_name', 'N/A')
+            ingest_id = node.get('ingest_id', 'N/A')
+            print(f"  • {ingest_id}: {site_name}")
+        if len(client.nodes) > 5:
+            print(f"  ... and {len(client.nodes) - 5} more")
+
+    print(f"\nSystems: {len(client.systems)}")
+    print(f"Sensors: {len(client.sensors)}")
+
+    print(f"\nMeasurements: {len(client.measurements)}")
+    if client.measurements:
+        print("\nSample Measurements:")
+        for i, meas in enumerate(client.measurements[:10]):
+            # Measurements are arrays: [ingest_id, source_name, source_id, measurand, value, datetime, lon, lat]
+            ingest_id = meas[0] if len(meas) > 0 else 'N/A'
+            measurand = meas[3] if len(meas) > 3 else 'N/A'
+            value = meas[4] if len(meas) > 4 else 'N/A'
+            dt = meas[5] if len(meas) > 5 else 'N/A'
+            print(f"  • {ingest_id}: {measurand}={value} at {dt}")
+        if len(client.measurements) > 10:
+            print(f"  ... and {len(client.measurements) - 10} more")
+
+    print_header(f"Flags: {len(client.flags)} (more details to come)")
+
+
+
+def main():
+    """Main entry point."""
+    # Set up argument parser
+    parser = argparse.ArgumentParser(
+        description="Load files from S3 or local filesystem into database"
+    )
+    parser.add_argument('key', type=str, help='S3 key or local file path')
+
+    # Mutually exclusive modes
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument('--stage-only', action='store_true',
+                           help='Load to staging tables only, skip ETL')
+    mode_group.add_argument('--preview', action='store_true',
+                           help='Show file contents without loading to DB')
+    mode_group.add_argument('--dryrun', action='store_true',
+                           help='Load with verification and rollback')
+
+    # Options
+    parser.add_argument('--download', action='store_true',
+                           help='Download file locally without loading to DB')
+    parser.add_argument('--env', type=str, help='Path to .env file')
+    parser.add_argument('--profile', type=str, help='AWS profile name')
+    parser.add_argument('--output', type=str, help='Download output path')
+    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+    parser.add_argument('--keep', action='store_true',
+                       help='Do not use TEMP tables')
+    parser.add_argument('--fetchlogs-id', type=int, default=-1,
+                       help='Fetchlogs ID to use (default: -1)')
+
+    args = parser.parse_args()
+
+    # Set environment variables before importing ingest modules
+    if args.env:
+        os.environ['DOTENV'] = args.env
+    if args.profile:
+        os.environ['AWS_PROFILE'] = args.profile
+    if args.debug:
+        os.environ['LOG_LEVEL'] = 'DEBUG'
+    if args.keep:
+        os.environ['USE_TEMP_TABLES'] = 'False'
+
+    # Set up logging
+    logging.basicConfig(
+        format='[%(asctime)s] %(levelname)s [%(name)s:%(lineno)s] %(message)s',
+        level=logging.DEBUG if args.debug else logging.INFO,
+        force=True,
+    )
+
+    # Suppress noisy loggers
+    logging.getLogger('boto3').setLevel(logging.WARNING)
+    logging.getLogger('botocore').setLevel(logging.WARNING)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+
+    # Import after environment variables are set
+    from ingest.settings import settings
+
+    ## initialize our resource for starters
+    key = args.key
+    id = -1
+    dryrun = not args.dryrun
+    stage_only = args.stage_only
+    # Get connection with autocommit disabled for rollback
+    connection = psycopg2.connect(settings.DATABASE_WRITE_URL)
+    connection.set_session(autocommit=False)
+    ## use that connection moving forward
+    resources = Resources(connection=connection)
+
+    try:
+        client = IngestClient(resources=resources)
+        path = deconstruct_path(key)
+
+        ## make sure the file exsits somewhere
+        if path.get('location') is None:
+            print(f"x Could not determine the location of that key")
+            sys.exit(1)
 
         if args.download:
-            print(f'downloading: {key}')
-            txt = get_object(key)
-            fpath = os.path.expanduser(f'~/Downloads/{key}')
-            os.makedirs(os.path.dirname(fpath), exist_ok=True)
-            with open(fpath.replace('.gz',''), 'w') as f:
-                f.write(txt)
+            if not path.get('location') == 'local':
+                ## download and update the path
+                print('download and update path')
+                path = download_from_location(path, output_path=args.output)
+                key = path.get('key')
+            else:
+                print('Key is already a local file')
 
 
-# Otherwise if we set the summary flag return a daily summary of errors
-elif args.summary:
-    rows = load_errors_summary(args.n)
-    print("Type\t\tDay\t\tCount\tMin\t\tMax\t\tID")
-    for row in rows:
-        print(f"{row[0]}\t{row[1]}\t{row[2]}\t{row[3]}\t{row[4]}\t{row[5]}")
-elif args.rejects:
-    rows = load_rejects_summary(args.n)
-    print("Provider\tSource\tLog\tNode\tRecords")
-    for row in rows:
-        print(f"{row[0]}\t{row[1]}\t{row[2]}\t{row[3]}\t{row[4]}")
-        if row[3] is None:
-            # check for a station file
-            station_keys = get_logs_from_pattern(f"{row[0]}/{row[1]}")
-            for station in station_keys:
-                print(f"station key: {station[1]}; log: {station[0]}")
-# otherwise fetch a list of errors
-elif args.errors:
-    errors = load_errors_list(args.n)
-    for error in errors:
-        print(f"------------------\nDATE: {error[2]}\nKEY: {error[1]}\nID:{error[0]}\nERROR:{error[5]}")
-        if 'realtime' in error[1]:
-            check_realtime_key(error[1], args.fix)
-else:
-    cronhandler({
-        "source": "check",
-        "pipeline_limit": args.pipeline,
-        "metadata_limit": args.metadata,
-        "realtime_limit": args.realtime,
-    }, {})
+        ## now we load the data and print out some details
+        print_header(f"Loading {key}")
+        client.load_keys([[id, key, None]])
+
+        ## print out some information about what was just loaded
+        print_client_summary(client)
+
+        if args.preview:
+            print_header('PREVIEW ONLY: Not loading data into the database')
+        else:
+            ## dump data into the database
+            ## if not load we just insert to staging tables
+            client.dump(load=(not stage_only))
+
+            ## output what we have
+            print_staging_summary(connection)
+
+            if not stage_only:
+                ## summarize the ingested data
+                ## this may or may not include already ingested data
+                print_current_data_summary(connection)
+
+
+        if args.dryrun:
+            print_header("Rolling back all changes")
+            connection.rollback()
+            connection.close()
+            print("   ✓ Rollback complete")
+        else:
+            connection.commit()
+
+
+    except Exception as e:
+
+        print(f"✗ Error: {e}")
+        sys.exit(1)
+
+    finally:
+        ## this will close the db connection
+        resources.close()
+
+
+
+if __name__ == '__main__':
+    main()

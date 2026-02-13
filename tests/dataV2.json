@@ -1,0 +1,14 @@
+{
+    "meta": {
+        "schema": "v2"
+    },
+    "measures": [
+        {"sensor_id":"testing-site1-pm10", "timestamp": "2024-01-01 00:00:00", "value": 2 },
+        {"ingest_id":"testing-site1-pm10", "timestamp": "2024-01-01 01:00:00", "value": 2 }
+    ],
+    "locations": [
+        {"location":"testing-site1", "label": "Site #1", "lon": "-123.04", "lat": "42.05"},
+        {"ingest_id":"testing-site2", "label": "Site #2", "lon": "-123.05", "lat": "42.06"},
+        {"sensor_node_id":"testing-site3", "label": "Site #3", "lon": "-123.06", "lat": "42.07"}
+    ]
+}

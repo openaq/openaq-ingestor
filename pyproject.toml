@@ -27,6 +27,7 @@ moto = {extras = ["s3"], version = "^5.0.0"}
 pytest-mock = "^3.14.0"
 pytest-cov = "^4.1.0"
 freezegun = "^1.5.0"
+pytest-timeout = "^2.4.0"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -42,9 +43,11 @@ markers = [
     "integration: Integration tests requiring database",
     "s3: Tests requiring S3 mocking",
 ]
-env = [
-    "DOTENV=.env.local",
-]
+
+log_cli = true
+log_cli_level = "INFO"
+log_cli_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+log_cli_date_format = "%H:%M:%S"
 
 [build-system]
 requires = ["poetry-core"]
