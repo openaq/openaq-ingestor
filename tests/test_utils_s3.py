@@ -240,7 +240,7 @@ class TestDeconstructPath:
         local_file = temp_local_file / "test-local.txt"
         result = deconstruct_path(str(local_file))
 
-        assert result['local'] is True
+        assert result['location'] == "local"
         assert result['key'] == str(local_file)
         assert 'bucket' not in result
 
