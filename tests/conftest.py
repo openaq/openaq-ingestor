@@ -3,10 +3,11 @@ import psycopg2
 import boto3
 from moto import mock_aws
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import json
 
 from ingest.settings import settings
+from ingest.resources import Resources
 
 
 @pytest.fixture(scope="session")
@@ -37,10 +38,24 @@ def db_cursor(db_connection):
 
 
 @pytest.fixture(scope="function")
+def ingest_resources(db_connection, mock_s3):
+    """
+    Provides Resources with test-managed resources.
+
+    Database connection and S3 client are managed by test fixtures.
+    Context will NOT close these resources (ownership=False).
+    """
+    ctx = Resources(
+        connection=db_connection,
+        s3_client=mock_s3
+    )
+    return ctx
+
+
+@pytest.fixture(scope="function")
 def clean_fetchlogs(db_cursor):
     """Truncates fetchlogs table before test."""
     db_cursor.execute("TRUNCATE TABLE fetchlogs CASCADE")
-    db_cursor.connection.commit()
     yield
     # Cleanup happens via db_connection rollback
 
@@ -186,14 +201,57 @@ def sample_batch_sns_event():
         ]
     }
 
+@pytest.fixture
+def cloudwatch_event():
+    """Returns mock CloudWatch/EventBridge event."""
+    return {
+        "source": "aws.events",
+        "detail-type": "Scheduled Event",
+        "resources": ["arn:aws:events:us-east-1:123456789012:rule/test-rule"]
+    }
+
 
 @pytest.fixture
 def lambda_context():
     """Mock Lambda context object."""
     class MockContext:
-        function_name = "openaq-ingest-handler"
+        function_name = "openaq-ingest"
         memory_limit_in_mb = 512
         invoked_function_arn = "arn:aws:lambda:us-east-1:123456789012:function:test"
         aws_request_id = "test-request-id-123"
 
     return MockContext()
+
+
+@pytest.fixture
+def sample_metadata_fetchlogs(db_cursor, db_connection, clean_fetchlogs):
+    """Create sample metadata fetchlogs for testing."""
+    test_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    fetchlog_ids = []
+
+    for i in range(5):
+        key = f"lcs-etl-pipeline/stations/test-{i}.json"
+        modified = test_time + timedelta(hours=i)
+
+        db_cursor.execute("""
+            INSERT INTO fetchlogs (key, last_modified, init_datetime)
+            VALUES (%s, %s, %s)
+            RETURNING fetchlogs_id
+        """, (key, modified, test_time))
+        fetchlog_ids.append(db_cursor.fetchone()[0])
+
+    return fetchlog_ids
+
+
+
+@pytest.fixture
+def mock_cronhandler_settings(mocker):
+    """Mock settings for cronhandler tests with safe defaults."""
+    mock_settings = mocker.patch('ingest.handler.settings')
+    mock_settings.PAUSE_INGESTING = False
+    mock_settings.INGEST_TIMEOUT = 300
+    mock_settings.FETCH_ASCENDING = True
+    mock_settings.METADATA_LIMIT = 10
+    mock_settings.REALTIME_LIMIT = 10
+    mock_settings.PIPELINE_LIMIT = 10
+    return mock_settings

@@ -22,14 +22,29 @@ This directory contains integration tests for the `openaq-ingestor` handler.
 
 ## Running Tests
 
-### Run all integration tests
+### Run all handler tests (integration + unit)
+```bash
+poetry run pytest tests/test_handler_integration.py tests/test_cronhandler_unit.py -v
+```
+
+### Run only integration tests
 ```bash
 poetry run pytest tests/test_handler_integration.py -v -m integration
 ```
 
+### Run only unit tests
+```bash
+poetry run pytest tests/test_cronhandler_unit.py -v
+```
+
 ### Run with coverage
 ```bash
-poetry run pytest tests/test_handler_integration.py --cov=ingest.handler --cov-report=term-missing
+poetry run pytest tests/test_handler_integration.py tests/test_cronhandler_unit.py --cov=ingest.handler --cov-report=term-missing
+```
+
+### Run specific test class
+```bash
+poetry run pytest tests/test_cronhandler_unit.py::TestCronhandlerTimeout -v
 ```
 
 ### Run specific test
@@ -45,12 +60,24 @@ poetry run pytest tests/ -v
 ## Test Structure
 
 ### Test Files
-- `test_handler_integration.py` - Integration tests for handler() function
+- `test_handler_integration.py` - Integration tests for handler() and cronhandler() functions
+- `test_cronhandler_unit.py` - Unit tests for cronhandler() orchestration logic
 
 ### Test Classes
+
+**Integration Tests (test_handler_integration.py):**
 - `TestHandlerSNSEvents` - Tests for SNS-wrapped S3 events (production path)
 - `TestHandlerDirectS3Events` - Tests for direct S3 events (local testing/manual invocations)
+- `TestCronhandlerIntegration` - Integration tests for EventBridge cron handler
 - `TestGetKeysFromSnsRecord` - Tests for SNS message parsing helper
+
+**Unit Tests (test_cronhandler_unit.py):**
+- `TestCronhandlerPaused` - Tests for PAUSE_INGESTING behavior
+- `TestCronhandlerFetchlogPattern` - Tests for fetchlogKey pattern processing
+- `TestCronhandlerLoaderOrchestration` - Tests for loader function orchestration
+- `TestCronhandlerEventOverrides` - Tests for event parameter overrides
+- `TestCronhandlerErrorHandling` - Tests for error resilience
+- `TestCronhandlerTimeout` - Tests for timeout handling
 
 ### Fixtures (conftest.py)
 - `db_connection` - Database connection with automatic rollback
@@ -86,10 +113,17 @@ Tests connect to the local PostgreSQL database on port 5777 (configured in `.env
 
 ## Coverage
 
-Current coverage for the handler() function:
-- SNS-wrapped S3 event processing: ~95%
-- Direct S3 event processing: ~95%
-- cronhandler(): Out of scope for these tests
+Current coverage for ingest/handler.py: **97%**
+
+Coverage breakdown:
+- `handler()` function: ~100% (SNS and direct S3 event paths)
+- `cronhandler()` function: ~100% (pause, fetchlog pattern, loader orchestration, timeout, error handling)
+- `getKeysFromSnsRecord()` helper: 100%
+- `getKeysFromS3Record()` helper: 100%
+
+Missing coverage (3 lines):
+- Exception handler in `handler()` (lines 79-80)
+- Warning log for unknown event types (line 84)
 
 Run coverage report to see detailed metrics:
 ```bash
