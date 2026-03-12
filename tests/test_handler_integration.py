@@ -343,7 +343,7 @@ class TestCronhandlerIntegration:
         }
 
         # Mock the pattern loader
-        with patch('ingest.handler.load_measurements_pattern') as mock_pattern:
+        with patch('ingest.handler.load_fetchlog') as mock_pattern:
             mock_pattern.return_value = {"processed": 3}
 
             # Act
@@ -352,7 +352,7 @@ class TestCronhandlerIntegration:
             # Assert
             # Note: handler() calls cronhandler() which returns the result
             # handler() itself doesn't return anything, so we just verify the call
-            mock_pattern.assert_called_once_with(limit=5, pattern="lcs-etl-pipeline/test%.json")
+            mock_pattern.assert_called_once_with(limit=5, key="lcs-etl-pipeline/test%.json")
 
     def test_cronhandler_respects_pause_setting(
         self,

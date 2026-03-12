@@ -130,7 +130,7 @@ class TestCronhandlerOrchestration:
         mock_cronhandler_settings
     ):
         """Test fetchlogKey parameter processes specific pattern."""
-        with patch('ingest.handler.load_measurements_pattern') as mock_pattern:
+        with patch('ingest.handler.load_fetchlog') as mock_pattern:
             mock_pattern.return_value = {"processed": 5}
 
             event = {
@@ -145,7 +145,7 @@ class TestCronhandlerOrchestration:
         # Assert
         mock_pattern.assert_called_once_with(
             limit=25,
-            pattern='lcs-etl-pipeline/test-*.json'
+            key='lcs-etl-pipeline/test-*.json'
         )
         assert result == {"processed": 5}
 

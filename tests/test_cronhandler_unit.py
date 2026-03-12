@@ -38,7 +38,7 @@ class TestCronhandlerFetchlogPattern:
     """Tests for fetchlogKey pattern processing."""
 
     @patch('ingest.handler.settings')
-    @patch('ingest.handler.load_measurements_pattern')
+    @patch('ingest.handler.load_fetchlog')
     def test_cronhandler_fetchlog_key_pattern(
         self,
         mock_load_pattern,
@@ -58,12 +58,12 @@ class TestCronhandlerFetchlogPattern:
         # Assert
         mock_load_pattern.assert_called_once_with(
             limit=10,
-            pattern="lcs-etl-pipeline/test.json"
+            key="lcs-etl-pipeline/test.json"
         )
         assert result == {"processed": 5}
 
     @patch('ingest.handler.settings')
-    @patch('ingest.handler.load_measurements_pattern')
+    @patch('ingest.handler.load_fetchlog')
     def test_cronhandler_fetchlog_key_custom_limit(
         self,
         mock_load_pattern,
@@ -86,7 +86,7 @@ class TestCronhandlerFetchlogPattern:
         # Assert
         mock_load_pattern.assert_called_once_with(
             limit=25,
-            pattern="lcs-etl-pipeline/test.json"
+            key="lcs-etl-pipeline/test.json"
         )
 
 

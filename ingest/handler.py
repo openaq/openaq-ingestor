@@ -137,7 +137,7 @@ def cronhandler(event, context):
     # this is mostly for debuging and running the occasional file from the aws console
     if fetchlogKey is not None:
         limit = event.get('limit', 10)
-        return load_measurements_pattern(limit=limit, pattern=fetchlogKey)
+        return load_fetchlog(limit=limit, key=fetchlogKey)
 
     logger.info(f"Running cron job: {event['source']}, ascending: {ascending}")
     # these exceptions are just a failsafe so that if something
@@ -214,11 +214,13 @@ def load_measurements(rows):
                 len(client.keys), len(client.measurements), len(client.nodes), time() - start_time)
 
 
-def load_measurements_pattern(
-        pattern = '^lcs-etl-pipeline/measures/.*\\.(csv|json)',
+# Forced (re)load  of a specific file
+def load_fetchlog(
+        key: str = None,
+        id: int = None,
         limit=10
     ):
-    rows = get_logs_from_pattern(pattern, limit)
+    rows = load_fetchlogs(pattern=key, id=id, limit=limit, force=True)
     load_measurements(rows)
     return len(rows)
 
@@ -228,6 +230,6 @@ def load_measurements_db(
     ascending: bool = False,
     pattern = '^lcs-etl-pipeline/measures/.*\\.(csv|json)'
     ):
-    rows = load_fetchlogs(pattern, limit, ascending)
+    rows = load_fetchlogs(pattern=pattern, limit=limit, ascending=ascending)
     load_measurements(rows)
     return len(rows)
