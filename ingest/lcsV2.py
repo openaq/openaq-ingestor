@@ -365,7 +365,10 @@ class IngestClient:
                 logger.info("dump_measurements: measurements: %s; time: %0.4f", len(self.measurements), time() - start_time)
 
                 for notice in connection.notices:
-                    logger.debug(f"etl_process_measurements {notice.rstrip()}")
+                    if notice.startswith("WARNING"):
+                        logger.warn(f"etl_process_measurements {notice.rstrip()}")
+                    else:
+                        logger.debug(f"etl_process_measurements {notice.rstrip()}")
 
         self.close()
 
@@ -666,8 +669,8 @@ class IngestClient:
             # using the same key/data format as below
             datetime = to_timestamp('dt', {"dt": m[2]})
             if len(m) == 5:
-                lat = m[3]
-                lon = m[4]
+                lon = m[3]
+                lat = m[4]
 
         elif isinstance(m, dict):
             for k, v in m.items():

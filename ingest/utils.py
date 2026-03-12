@@ -272,6 +272,7 @@ def deconstruct_path(key: str):
         path["bucket"] = settings.FETCH_BUCKET
         path["key"] = key
 
+    print(path)
     return path
 
 def get_data(key: str, resources=None):
@@ -544,9 +545,12 @@ def load_success(cursor, keys, message: str = 'success'):
 
 
 def load_fetchlogs(
-        pattern: str,
+        pattern: str = None,
+        id: int = None,
+        batch: str = None,
         limit: int = 250,
         ascending: bool = False,
+        force: bool = False,
         connection=None
 ):
     r"""Load and lock a batch of fetchlogs ready for processing.
@@ -596,6 +600,27 @@ def load_fetchlogs(
         connection = rs.get_connection(autocommit=True)
 
     batch_uuid = uuid.uuid4().hex
+
+    if id is not None:
+        where = f"fetchlogs_id = {id}"
+    elif batch is not None:
+        where = f"batch_uuid = '{batch}'"
+        batch_uuid = batch
+    else:
+        where = f"key~E'{pattern}'"
+
+
+    if not force:
+        where += """
+        AND NOT has_error
+        AND init_datetime is not null
+        AND completed_datetime is null
+        AND (
+          loaded_datetime IS NULL
+          OR loaded_datetime < now() - '30min'::interval
+        )
+        """
+
     with connection.cursor() as cursor:
         cursor.execute(
             f"""
@@ -607,14 +632,7 @@ def load_fetchlogs(
               FROM (
                 SELECT fetchlogs_id
                 FROM fetchlogs
-                WHERE key~E'{pattern}'
-                AND NOT has_error
-                AND init_datetime is not null
-                AND completed_datetime is null
-                AND (
-                   loaded_datetime IS NULL
-                   OR loaded_datetime < now() - '30min'::interval
-                )
+                WHERE {where}
                 ORDER BY last_modified {order} nulls last
                 LIMIT %s
                 FOR UPDATE SKIP LOCKED

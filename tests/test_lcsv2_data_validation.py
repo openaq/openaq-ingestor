@@ -337,8 +337,8 @@ class TestAddMeasurement:
 
         assert len(client.measurements) == 1
         measurement = client.measurements[0]
-        assert measurement[6] == '-74.0060'  # lon
-        assert measurement[7] == '40.7128'  # lat
+        assert measurement[6] == '40.7128'  # lat
+        assert measurement[7] == '-74.0060'  # lon
 
     def test_add_measurement_csv_too_short_skipped(self):
         """Test that CSV list with <3 elements is skipped."""

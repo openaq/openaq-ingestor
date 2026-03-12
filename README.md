@@ -288,7 +288,7 @@ poetry run pytest tests/test_handler_integration.py::TestHandlerSNSEvents::test_
 
 ## Development Workflow
 
-### Using check.py - File Loading CLI Utility
+### Using check.py - File checking CLI Utility
 
 The `check.py` utility provides a command-line interface for loading and testing individual files from S3 or local filesystem.
 
@@ -396,6 +396,38 @@ The utility provides detailed summaries at each step:
 - **Client Summary**: Nodes, systems, sensors, measurements loaded into memory
 - **Staging Summary**: Counts and date ranges in staging tables
 - **Current Data Summary**: Final table counts after ETL processing (full load mode only)
+
+### Using local.py - File Loading CLI Utility
+
+A CLI utility for manually loading files into the database from S3, useful for debugging and reprocessing.
+
+#### Usage
+
+```bash
+# Load a single file by fetchlog ID
+poetry run python local.py --id 12345
+
+# Load a single file by S3 key
+poetry run python local.py --key "s3://bucket/path/to/file.json"
+
+# Load a batch of files by batch UUID
+poetry run python local.py --batch "some-batch-uuid"
+
+# Enable debug logging with any mode
+poetry run python local.py --debug --id 12345
+```
+
+#### Options
+
+| Flag | Description |
+|------|-------------|
+| `--id` | Fetchlog ID of the file to load |
+| `--key` | S3 key/pattern of the file to load |
+| `--batch` | Batch UUID to load (up to 100 files) |
+| `--debug` | Enable debug-level logging |
+
+You must provide exactly one of `--id`, `--key`, or `--batch`.
+
 
 ### Processing a Test File with Python API
 

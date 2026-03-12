@@ -19,6 +19,7 @@ __insert_time_ms int;
 __cache_time_ms int;
 __error_context text;
 __ingest_method text := 'lcs';
+  __rec record;
 BEGIN
 
 
@@ -178,13 +179,15 @@ WHERE sensors_id IS NOT NULL
 ON CONFLICT DO NOTHING
 RETURNING sensors_id, datetime, value, lat, lon
 ), inserted as (
-   INSERT INTO staging_inserted_measurements (sensors_id, datetime, value, lat, lon)
-   SELECT sensors_id
-   , datetime
-   , value
-   , lat
-   , lon
-   FROM inserts
+   INSERT INTO staging_inserted_measurements (sensors_id, datetime, value, lon, lat, fetchlogs_id)
+   SELECT i.sensors_id
+   , i.datetime
+   , i.value
+   , i.lon
+   , i.lat
+   , s.fetchlogs_id
+   FROM inserts i
+   JOIN staging_measurements s ON (i.sensors_id = s.sensors_id AND i.datetime = s.datetime)
    RETURNING sensors_id, datetime
 )
 SELECT MIN(datetime)
@@ -498,6 +501,6 @@ RAISE NOTICE 'inserted-measurements: %, inserted-from: %, inserted-to: %, reject
 
 EXCEPTION WHEN OTHERS THEN
  GET STACKED DIAGNOSTICS __error_context = PG_EXCEPTION_CONTEXT;
- RAISE NOTICE 'Failed to ingest measurements: %, %', SQLERRM, __error_context;
+ RAISE WARNING 'Failed to ingest measurements: %, %', SQLERRM, __error_context;
 
 END $$;

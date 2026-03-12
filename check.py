@@ -245,14 +245,14 @@ def main():
             print(f"x Could not determine the location of that key")
             sys.exit(1)
 
-        if args.download:
-            if not path.get('location') == 'local':
+        if not path.get('location') == 'local':
+            if args.download:
                 ## download and update the path
                 print('download and update path')
                 path = download_from_location(path, output_path=args.output)
-                key = path.get('key')
-            else:
-                print('Key is already a local file')
+            key = path.get('key')
+        else:
+            print('Key is already a local file')
 
 
         ## now we load the data and print out some details

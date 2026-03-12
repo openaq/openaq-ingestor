@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+
+import argparse
 import os
 import sys
 import orjson
@@ -9,70 +12,72 @@ import csv
 
 from ingest.lcsV2 import (
     IngestClient,
-    load_measurements,
-    load_measurements_db,
-    load_measurements_pattern,
 )
 
 from ingest.utils import (
-    select_object,
-    get_file,
+    load_fetchlogs,
 )
 
-logger = logging.getLogger('handler')
 
-logging.basicConfig(
-    format='[%(asctime)s] %(levelname)s [%(name)s:%(lineno)s] %(message)s',
-    level='DEBUG',
-    force=True,
-)
-
-logging.getLogger('boto3').setLevel(logging.WARNING)
-logging.getLogger('botocore').setLevel(logging.WARNING)
-logging.getLogger('urllib3').setLevel(logging.WARNING)
+logger = logging.getLogger('local')
 
 
-# local files
-#load_measurements_db(pattern = '^/home/christian/.*\\.(csv|json)')
-# remote files, make sure it can at least read it
-#load_measurements_db()
 
-## client based methods
-## get a client
-client = IngestClient()
-## load all the data into the client
-#client.load_keys([
-   # [1, '~/Downloads/openaq-fetches/lcs-etl-pipeline/measures/airgradient/2025-02-14/1739542053-5n5q.json', '2024-10-23']
-   # [1, '/home/christian/Downloads/1739444861-6bvu.json', '2025-02-13']
- #   [7786652, 'lcs-etl-pipeline/measures/airgradient/2025-02-14/1739549254-h5b0m.json.gz', '2025-02-14']
-#])
+def main():
+    """load files locally"""
 
-load_measurements_pattern('lcs-etl-pipeline/measures/geohealth/2025-11-18/1763524009-xnfyq.json.gz', limit=2)
+    parser = argparse.ArgumentParser(
+        description="Load files from S3 or local filesystem into database"
+    )
 
-## dump just the locations
-#client.dump()
+    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
 
-# rollups and cached tables
-#client.process_hourly_data()
-#client.process_daily_data()
-#client.process_annual_data()
-#client.refresh_cached_tables()
+    mode_group = parser.add_mutually_exclusive_group(required=True)
+    mode_group.add_argument('--id', type=int, help='key of the file to load')
+    mode_group.add_argument('--key', type=str, help='id of the file to load')
+    mode_group.add_argument('--batch', type=str, help='batch uuid of files to load')
 
-#client.dump_locations()
-#client.dump_measurements(load=True)
-## dump just the measurements
-# client.dump_measurements
-## Dump both
-#client.dump()
+    args = parser.parse_args()
 
-# #client.load(data)
-# client.load_metadata(data['meta'])
-# client.load_locations(data['locations'])
-# client.load_measurements(data['measures'])
+    logging.basicConfig(
+        format='[%(asctime)s] %(levelname)s [%(name)s:%(lineno)s] %(message)s',
+        level=('DEBUG' if args.debug else 'INFO'),
+        force=True,
+    )
 
-# #client.dump()
+    logging.getLogger('boto3').setLevel(logging.WARNING)
+    logging.getLogger('botocore').setLevel(logging.WARNING)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+
+    rows = []
+
+    if args.id is not None:
+        # load via id
+        logger.info(args)
+        rows = load_fetchlogs(id=args.id, limit=1, force=True)
+    elif args.key is not None:
+        # load via key
+        rows = load_fetchlogs(pattern=args.key, limit=1, force=True)
+    elif args.batch is not None:
+        # load via batch
+        rows = load_fetchlogs(batch=args.batch, limit=100, force=True)
 
 
-# print(time() - start_time)
-# print(f"measurements: {len(client.measurements)}")
-# print(f"locations: {len(client.nodes)}")
+    logger.info(f"loading {len(rows)} files")
+    if len(rows)>0:
+        start_time = time()
+        # get a client object to hold all the data
+        client = IngestClient()
+        # load all the keys
+        client.load_keys(rows)
+        # and finally we can dump it all into the db
+        client.dump()
+        # write to the log
+        logger.info("load_measurements:get: %s keys; %s measurements; %s locations; %0.4f seconds",
+                    len(client.keys), len(client.measurements), len(client.nodes), time() - start_time)
+
+
+
+
+if __name__ == '__main__':
+    main()
