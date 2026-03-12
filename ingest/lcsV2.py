@@ -660,7 +660,7 @@ class IngestClient:
         # csv method
         if isinstance(m, list):
             if len(m) < 3:
-                logger.warning(f'Not enough data in list value: {m}')
+                logger.warning(f'Not enough data in list value - {self.fetchlogs_id}: {m}')
                 return
 
             fetchlogs_id = self.fetchlogs_id
