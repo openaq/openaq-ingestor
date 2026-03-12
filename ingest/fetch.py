@@ -287,7 +287,7 @@ def submit_file_error(ids, e):
 @app.command()
 def load_db(limit: int = 50, ascending: bool = False):
     pattern = '^realtime-gzipped/.*\\.ndjson.gz$'
-    rows = load_fetchlogs(pattern, limit, ascending)
+    rows = load_fetchlogs(pattern=pattern, limit=limit, ascending=ascending)
     if len(rows) > 0:
         try:
             load_realtime(rows)

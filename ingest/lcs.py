@@ -323,7 +323,7 @@ def load_metadata_bucketscan(count=100):
 def load_metadata_db(limit=250, ascending: bool = False):
     order = 'ASC' if ascending else 'DESC'
     pattern = 'lcs-etl-pipeline/stations/'
-    rows = load_fetchlogs(pattern, limit, ascending)
+    rows = load_fetchlogs(pattern=pattern, limit=limit, ascending=ascending)
     contents = []
     for row in rows:
         logger.debug(row)
@@ -540,7 +540,7 @@ def load_measurements_batch(batch: str):
 
 def load_measurements_db(limit=250, ascending: bool = False):
     pattern = '^lcs-etl-pipeline/measures/.*\\.csv'
-    rows = load_fetchlogs(pattern, limit, ascending)
+    rows = load_fetchlogs(pattern=pattern, limit=limit, ascending=ascending)
     load_measurements(rows)
     return len(rows)
 
