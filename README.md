@@ -415,6 +415,10 @@ poetry run python local.py --batch "some-batch-uuid"
 
 # Enable debug logging with any mode
 poetry run python local.py --debug --id 12345
+
+# Load files from a bucket directly to the db
+poetry run python local.py --bucket=openaq-testing-bucket --prefix=test-files
+
 ```
 
 #### Options
@@ -424,6 +428,9 @@ poetry run python local.py --debug --id 12345
 | `--id` | Fetchlog ID of the file to load |
 | `--key` | S3 key/pattern of the file to load |
 | `--batch` | Batch UUID to load (up to 100 files) |
+| `--bucket` | Load files directly from a bucket
+| `--prefix` | Specify the prefix to use when loading from bucket
+| `--limit` | Limit the number of files loaded
 | `--debug` | Enable debug-level logging |
 
 You must provide exactly one of `--id`, `--key`, or `--batch`.

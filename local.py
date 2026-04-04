@@ -16,6 +16,8 @@ from ingest.lcsV2 import (
 
 from ingest.utils import (
     load_fetchlogs,
+    list_objects,
+    upsert_fetchlogs,
 )
 
 
@@ -31,11 +33,15 @@ def main():
     )
 
     parser.add_argument('--debug', action='store_true', help='Enable debug logging')
+    parser.add_argument('--limit', type=int, help='file limit to ingest', default=300)
+    parser.add_argument('--prefix', type=str, help='file limit to ingest', default='')
 
     mode_group = parser.add_mutually_exclusive_group(required=True)
     mode_group.add_argument('--id', type=int, help='key of the file to load')
     mode_group.add_argument('--key', type=str, help='id of the file to load')
     mode_group.add_argument('--batch', type=str, help='batch uuid of files to load')
+    mode_group.add_argument('--bucket', type=str, help='S3 location to lookup')
+
 
     args = parser.parse_args()
 
@@ -53,14 +59,21 @@ def main():
 
     if args.id is not None:
         # load via id
-        logger.info(args)
         rows = load_fetchlogs(id=args.id, limit=1, force=True)
     elif args.key is not None:
         # load via key
         rows = load_fetchlogs(pattern=args.key, limit=1, force=True)
     elif args.batch is not None:
         # load via batch
-        rows = load_fetchlogs(batch=args.batch, limit=100, force=True)
+        rows = load_fetchlogs(batch=args.batch, limit=args.limit, force=True)
+    elif args.bucket is not None:
+        from ingest.settings import settings
+        settings.FETCH_BUCKET = args.bucket
+        # load directly from bucket
+        # add it to fetchlogs and then ingest
+        # "2026-03-28/"
+        keys = list_objects(args.bucket, prefix=args.prefix, limit=args.limit)
+        rows = upsert_fetchlogs(keys)
 
 
     logger.info(f"loading {len(rows)} files")

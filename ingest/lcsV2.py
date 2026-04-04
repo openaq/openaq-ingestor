@@ -33,8 +33,6 @@ from .utils import (
 app = typer.Typer()
 dir_path = os.path.dirname(os.path.realpath(__file__))
 
-FETCH_BUCKET = settings.FETCH_BUCKET
-
 logger = logging.getLogger(__name__)
 
 warnings.filterwarnings(
@@ -383,6 +381,10 @@ class IngestClient:
         if "measures" in data.keys():
             logger.debug("loading measurements")
             self.load_measurements(data.get('measures'))
+        # transform is currently using the measurements key
+        if "measurements" in data.keys():
+            logger.debug("loading measurements")
+            self.load_measurements(data.get('measurements'))
 
 
     # def reset(self):
@@ -451,7 +453,13 @@ class IngestClient:
         elif is_json:
             # all json data should just be parsed and loaded
             data = orjson.loads(content)
-            self.load(data)
+            if isinstance(data, dict):
+                self.load(data)
+            elif isinstance(data, list):
+                for d in data:
+                    self.load(d)
+            else:
+                raise Exception(f'Not sure what to do with json data of type {type(data)}')
         else:
             raise Exception('Not sure how to read file')
 

@@ -374,7 +374,7 @@ def get_file(filepath: str):
 
 def get_object(
         key: str,
-        bucket: str = settings.FETCH_BUCKET,
+        bucket: str = None,
         resources = None,
 ):
     """Retrieve and decompress an S3 object as text.
@@ -399,6 +399,8 @@ def get_object(
         >>> import json
         >>> data = json.loads(text)
     """
+    if bucket is None:
+        bucket = settings.FETCH_BUCKET
     key = unquote_plus(key)
     text = ''
     rs = resources or Resources()
@@ -419,7 +421,7 @@ def get_object(
 def put_object(
         data: str,
         key: str,
-        bucket: str = settings.FETCH_BUCKET,
+        bucket: str = None,
         resources = None,
 ):
     """Upload a gzip-compressed string to S3 or local filesystem.
@@ -441,6 +443,8 @@ def put_object(
     Example:
         >>> put_object('{"data": "example"}', 'output/data.json.gz')
     """
+    if bucket is None:
+        bucket = settings.FETCH_BUCKET
     out = io.BytesIO()
     with gzip.GzipFile(fileobj=out, mode='wb') as gz:
         with io.TextIOWrapper(gz, encoding='utf-8') as wrapper:
@@ -698,3 +702,69 @@ def write_csv(cursor, data, table, columns):
             sio,
         )
         logger.debug(f"copied {cursor.rowcount} rows from table: {table}")
+
+
+def list_objects(bucket: str, prefix: str = "", limit: int = 100, resources=None):
+    """List S3 objects matching a bucket and prefix.
+
+    Args:
+        bucket: S3 bucket name
+        prefix: Key prefix to filter by (e.g., 'lcs-etl-pipeline/measures/')
+        limit: Maximum number of objects to return
+        resources: Optional Resources instance
+
+    Returns:
+        list[dict]: List of dicts with 'key' and 'last_modified' for each object
+    """
+    rs = resources or Resources()
+    response = rs.s3.list_objects_v2(
+        Bucket=bucket,
+        Prefix=prefix,
+        MaxKeys=limit,
+    )
+    objects = []
+    for obj in response.get("Contents", []):
+        objects.append(obj["Key"])
+        #objects.append({
+        #    "key": obj["Key"],
+        #    "last_modified": obj["LastModified"],
+        #})
+    return objects
+
+def upsert_fetchlogs(keys: list, connection=None):
+    """Upsert keys into the fetchlogs table.
+
+    Inserts new keys into fetchlogs, skipping any that already exist.
+
+    Args:
+        keys (list): List of S3 key strings to upsert
+        connection: Optional psycopg2 connection. Creates one if not provided.
+
+    Returns:
+        int: Number of rows inserted
+    """
+    if not keys:
+        return 0
+
+    if connection is None:
+        rs = Resources()
+        connection = rs.get_connection(autocommit=True)
+
+    batch_uuid = uuid.uuid4().hex
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO fetchlogs (key, loaded_datetime, jobs, batch_uuid)
+            SELECT unnest(%s::text[]), CURRENT_TIMESTAMP, 1, %s
+            ON CONFLICT (key) DO UPDATE
+            SET batch_uuid = EXCLUDED.batch_uuid
+            RETURNING fetchlogs.fetchlogs_id
+            , fetchlogs.key
+            , fetchlogs.last_modified
+            """,
+            (keys,batch_uuid),
+        )
+        rows = cursor.fetchall()
+        logger.debug(f'Inserted {len(rows)} from {len(keys)} keys')
+        return rows
