@@ -427,7 +427,7 @@ class IngestClient:
 
         # is it a local file? This is used for dev
         # but likely fine to leave in
-        # logger.debug(os.path.expanduser(key))
+        # logger.info(os.path.expanduser(key))
         if os.path.exists(os.path.expanduser(key)):
             content = get_file(os.path.expanduser(key)).read()
         else:
@@ -532,29 +532,78 @@ class IngestClient:
             self.sensors.append(sensor)
             self.sensor_ids.append(id)
 
-    def add_flags(self, flags, sensor_id, fetchlogsId):
+    def add_flags(self, flags, sensor_id, fetchlogsId, dt=None):
         for f in flags:
             flag = {}
             metadata = {}
             flag["sensor_ingest_id"] = sensor_id
             flag["fetchlogs_id"] = fetchlogsId
+
+            # normalize string flags to dict
+            if isinstance(f, str):
+                f = {
+                    "flag_id": f"{f}",
+                    "note": f,
+                }
+            elif isinstance(f, dict):
+                pass
+            else:
+                continue
+
             for key, value in f.items():
                 key = str.replace(key, "flag_", "")
                 if key == "id":
-                    v = str.replace(value, f"{sensor_id}-", "")
-                    flag["ingest_id"] = v
-
-                elif key == 'datetime_from':
+                    flag["ingest_id"] = value
+                elif key == "flag":
+                    flag["ingest_id"] = f"{value}"
+                    if "note" not in f:
+                        flag["note"] = value
+                elif key == "starts":
                     flag["datetime_from"] = value
-                elif key == 'datetime_to':
+                elif key == "ends":
                     flag["datetime_to"] = value
-                elif key == 'note':
+                elif key == "datetime_from":
+                    flag["datetime_from"] = value
+                elif key == "datetime_to":
+                    flag["datetime_to"] = value
+                elif key == "note":
                     flag["note"] = value
                 else:
                     metadata[key] = value
 
+            # fall back to the passed datetime if not set by the flag itself
+            if "datetime_from" not in flag:
+                flag["datetime_from"] = dt
+            if "datetime_to" not in flag:
+                flag["datetime_to"] = dt
+
             flag["metadata"] = orjson.dumps(metadata).decode()
             self.flags.append(flag)
+
+    # def add_flags(self, flags, sensor_id, fetchlogsId, sensor_nodes_id: int = None):
+    #     for f in flags:
+    #         flag = {}
+    #         metadata = {}
+    #         flag["sensor_ingest_id"] = sensor_id
+    #         flag["sensor_node_ingest_id"] = sensor_nodes_id
+    #         flag["fetchlogs_id"] = fetchlogsId
+    #         for key, value in f.items():
+    #             key = str.replace(key, "flag_", "")
+    #             if key == "id":
+    #                 v = str.replace(value, f"{sensor_id}-", "")
+    #                 flag["ingest_id"] = v
+
+    #             elif key == 'datetime_from':
+    #                 flag["datetime_from"] = value
+    #             elif key == 'datetime_to':
+    #                 flag["datetime_to"] = value
+    #             elif key == 'note':
+    #                 flag["note"] = value
+    #             else:
+    #                 metadata[key] = value
+
+    #         flag["metadata"] = orjson.dumps(metadata).decode()
+    #         self.flags.append(flag)
 
     def add_systems(self, j, node_id, fetchlogsId):
         logger.debug(f'adding system')
@@ -639,6 +688,9 @@ class IngestClient:
             if node.get('ingestMatchingMethod') is None:
                 node['matching_method'] = self.matching_method
 
+            # check for flags
+            self.add_flags(j.get('flags',[]), ingest_id, fetchlogs_id)
+
             # prevent adding the node more than once
             # this does not save processing time of course
             if ingest_id not in self.node_ids:
@@ -695,6 +747,8 @@ class IngestClient:
             lat = meas.get('lat', None)
             fetchlogs_id = m.get('fetchlogs_id', self.fetchlogs_id)
 
+            self.add_flags(m.get('flags', []), ingest_id, fetchlogs_id, datetime)
+
         # parse the ingest id here
         if ingest_id is None:
             raise Exception(f"Could not find ingest id in {meas}")
@@ -710,7 +764,6 @@ class IngestClient:
 
         if not None in [ingest_id, datetime, source_name, source_id, measurand]:
             self.measurements.append([ingest_id, source_name, source_id, measurand, value, datetime, lon, lat, fetchlogs_id])
-
 
 
     def refresh_cached_tables(self):

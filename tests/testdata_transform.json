@@ -30,6 +30,14 @@
         "proj": "WSG84"
       },
       "ismobile": false,
+        "flags": [
+            {
+                "starts": "2024-01-01T00:00:00-08:00",
+                "ends": "2024-01-02T00:00:00-08:00",
+                "flag": "info::node-info",
+                "note": "Sensor node level information"
+            }
+        ],
       "systems": [
         {
           "key": "transform-ts1",
@@ -43,7 +51,14 @@
               "averaging_interval_secs": 3600,
               "logging_interval_secs": 3600,
               "status": "asdf",
-              "flags": []
+              "flags": [
+                  {
+                      "starts": "2024-01-01T00:00:00-08:00",
+                      "ends": "2024-01-02T00:00:00-08:00",
+                      "flag": "info::sensor-info",
+                      "note": "Sensor level information"
+                  }
+              ]
             },
             {
               "key": "transform-ts1-temperature",
@@ -68,7 +83,8 @@
     {
       "key": "transform-ts1-temperature",
       "timestamp": "2024-01-01T00:00:00-08:00",
-      "value": 80
+      "value": 700,
+      "flags": ["exceedance::HighValue"]
     }
   ]
 }

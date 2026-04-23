@@ -19,7 +19,7 @@ import psycopg2
 
 from ingest.lcsV2 import IngestClient
 from ingest.resources import Resources
-from ingest.utils import deconstruct_path, get_object
+from ingest.utils import deconstruct_path, get_object, upsert_fetchlogs
 
 
 def download_from_location(path: dict, output_path=None):
@@ -227,7 +227,9 @@ def main():
 
     ## initialize our resource for starters
     key = args.key
-    id = -1
+    ## need a fetchlog id for rejects table
+    keys = upsert_fetchlogs([key])
+    id = keys[0][0]
     dryrun = not args.dryrun
     stage_only = args.stage_only
     # Get connection with autocommit disabled for rollback

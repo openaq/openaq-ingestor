@@ -59,7 +59,7 @@ CREATE {table} IF NOT EXISTS staging_sensors (
 );
 
 CREATE {table} IF NOT EXISTS staging_flags (
-    ingest_id text NOT NULL,
+    ingest_id text, --NOT NULL,
     sensor_ingest_id text NOT NULL,
     flags_id int,
     sensor_nodes_id int,
