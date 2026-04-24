@@ -50,16 +50,13 @@ def s3_setup():
         yield s3_client, bucket_name
 
 
-# @pytest.fixture
-# def mock_resources(s3_setup):
-#     """Create a mock Resources object with mocked S3 client."""
-#     s3_client, bucket_name = s3_setup
-
-#     # Create a mock Resources object
-#     mock_rs = MagicMock()
-#     mock_rs.s3 = s3_client
-
-#     return mock_rs
+@pytest.fixture
+def s3_only_resources(s3_setup):
+    """Resources with only S3 client, no database."""
+    s3_client, bucket_name = s3_setup
+    resources = MagicMock()
+    resources.s3 = s3_client
+    return resources
 
 
 @pytest.fixture
@@ -80,11 +77,11 @@ def temp_local_file(tmp_path):
 class TestGetObject:
     """Tests for get_object() S3 retrieval function."""
 
-    def test_get_object_retrieves_plain_json(self, s3_setup, ingest_resources):
+    def test_get_object_retrieves_plain_json(self, s3_setup, s3_only_resources):
         """Test retrieving plain (non-gzipped) JSON from S3."""
         s3_client, bucket_name = s3_setup
 
-        result = get_object('test-data.json', bucket=bucket_name, resources=ingest_resources)
+        result = get_object('test-data.json', bucket=bucket_name, resources=s3_only_resources)
 
         # For non-gzipped files, result is StreamingBody object
         # Read it to get the content
@@ -96,18 +93,18 @@ class TestGetObject:
         assert 'test' in content
         assert 'data' in content
 
-    def test_get_object_retrieves_gzipped_json(self, s3_setup, ingest_resources):
+    def test_get_object_retrieves_gzipped_json(self, s3_setup, s3_only_resources):
         """Test retrieving and decompressing gzipped JSON from S3."""
         s3_client, bucket_name = s3_setup
 
-        result = get_object('test-data.json.gz', bucket=bucket_name, resources=ingest_resources)
+        result = get_object('test-data.json.gz', bucket=bucket_name, resources=s3_only_resources)
 
         # For gzipped files, function decompresses and returns string
         assert isinstance(result, str)
         assert '{"test": "data"' in result
         assert 'value' in result
 
-    def test_get_object_handles_url_encoded_key(self, s3_setup, ingest_resources):
+    def test_get_object_handles_url_encoded_key(self, s3_setup, s3_only_resources):
         """Test that URL-encoded keys are decoded properly."""
         s3_client, bucket_name = s3_setup
 
@@ -119,7 +116,7 @@ class TestGetObject:
         )
 
         # Pass URL-encoded key
-        result = get_object('test+file.json', bucket=bucket_name, resources=ingest_resources)
+        result = get_object('test+file.json', bucket=bucket_name, resources=s3_only_resources)
 
         if hasattr(result, 'read'):
             content = result.read().decode('utf-8')
@@ -128,12 +125,12 @@ class TestGetObject:
 
         assert 'space' in content
 
-    def test_get_object_with_missing_file_raises_exception(self, s3_setup, ingest_resources):
+    def test_get_object_with_missing_file_raises_exception(self, s3_setup, s3_only_resources):
         """Test that missing S3 object raises exception."""
         s3_client, bucket_name = s3_setup
 
         with pytest.raises(Exception):
-            get_object('nonexistent-file.json', bucket=bucket_name, resources=ingest_resources)
+            get_object('nonexistent-file.json', bucket=bucket_name, resources=s3_only_resources)
 
     def test_get_object_without_resources_creates_default(self, s3_setup):
         """Test that get_object works without explicit resources parameter.
@@ -153,13 +150,13 @@ class TestGetObject:
 class TestPutObject:
     """Tests for put_object() S3 write function."""
 
-    def test_put_object_writes_gzipped_to_s3(self, s3_setup, ingest_resources):
+    def test_put_object_writes_gzipped_to_s3(self, s3_setup, s3_only_resources):
         """Test writing gzipped data to S3."""
         s3_client, bucket_name = s3_setup
 
         test_data = '{"uploaded": "data", "count": 456}'
 
-        put_object(test_data, 'uploaded.json.gz', bucket=bucket_name, resources=ingest_resources)
+        put_object(test_data, 'uploaded.json.gz', bucket=bucket_name, resources=s3_only_resources)
 
         # Verify file was uploaded and is gzipped
         response = s3_client.get_object(Bucket=bucket_name, Key='uploaded.json.gz')
@@ -262,22 +259,22 @@ class TestDeconstructPath:
 class TestGetData:
     """Tests for get_data() file retrieval function."""
 
-    def test_get_data_reads_from_s3(self, s3_setup, ingest_resources):
+    def test_get_data_reads_from_s3(self, s3_setup, s3_only_resources):
         """Test reading data from S3."""
         s3_client, bucket_name = s3_setup
 
-        result = get_data(f's3://{bucket_name}/test-data.json', resources=ingest_resources)
+        result = get_data(f's3://{bucket_name}/test-data.json', resources=s3_only_resources)
 
         # Result is StreamingBody
         content = result.read().decode('utf-8')
         assert 'test' in content
         assert 'data' in content
 
-    def test_get_data_reads_gzipped_from_s3(self, s3_setup, ingest_resources):
+    def test_get_data_reads_gzipped_from_s3(self, s3_setup, s3_only_resources):
         """Test reading gzipped data from S3."""
         s3_client, bucket_name = s3_setup
 
-        result = get_data(f's3://{bucket_name}/test-data.json.gz', resources=ingest_resources)
+        result = get_data(f's3://{bucket_name}/test-data.json.gz', resources=s3_only_resources)
 
         # Result is GzipFile
         content = result.read().decode('utf-8')
@@ -329,11 +326,11 @@ class TestGetData:
             if os.path.exists(cwd_file):
                 os.remove(cwd_file)
 
-    def test_get_data_uses_default_bucket_for_key_only(self, s3_setup, ingest_resources):
+    def test_get_data_uses_default_bucket_for_key_only(self, s3_setup, s3_only_resources):
         """Test that key-only uses settings.FETCH_BUCKET."""
         s3_client, bucket_name = s3_setup
 
-        result = get_data('test-data.json', resources=ingest_resources)
+        result = get_data('test-data.json', resources=s3_only_resources)
 
         content = result.read().decode('utf-8')
         assert 'test' in content

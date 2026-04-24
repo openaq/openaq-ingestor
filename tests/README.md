@@ -32,9 +32,10 @@ poetry run pytest tests/test_handler_integration.py tests/test_cronhandler_unit.
 poetry run pytest tests/test_handler_integration.py -v -m integration
 ```
 
-### Run only unit tests
+### Run only unit-like tests
 ```bash
 poetry run pytest tests/test_cronhandler_unit.py -v
+poetry run pytest tests -m "not integration"
 ```
 
 ### Run with coverage
