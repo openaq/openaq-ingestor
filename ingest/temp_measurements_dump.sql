@@ -29,7 +29,9 @@ CREATE {table} IF NOT EXISTS staging_measurements (
     source_id text NOT NULL,
     measurand text NOT NULL,
     sensors_id int,
+    measurands_id int,
     value float,
+    value_original float,
     datetime timestamptz,
     lon float,
     lat float,
@@ -44,6 +46,7 @@ CREATE {table} IF NOT EXISTS staging_inserted_measurements (
   sensors_id int
   , datetime timestamptz
   , value double precision
+  , value_original double precision
   , lat double precision
   , lon double precision
   , fetchlogs_id int
