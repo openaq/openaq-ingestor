@@ -22,6 +22,21 @@ DROP TABLE IF EXISTS
 --     fetchlogs_id int
 -- );
 
+CREATE {table} IF NOT EXISTS staging_flags (
+    ingest_id text, --NOT NULL,
+    sensor_ingest_id text NOT NULL,
+    flags_id int,
+    sensor_nodes_id int,
+    sensors_id int,
+    flag_types_id int,
+    datetime_from timestamptz,
+    datetime_to timestamptz,
+    period tstzrange,
+    note text,
+    metadata jsonb,
+    fetchlogs_id int
+);
+
 
 CREATE {table} IF NOT EXISTS staging_measurements (
     ingest_id text NOT NULL,
