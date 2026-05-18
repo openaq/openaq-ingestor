@@ -9,7 +9,7 @@ import pytest
 from datetime import datetime, timezone, timedelta
 from ingest.utils import get_logs_from_pattern
 
-
+@pytest.mark.integration
 class TestGetLogsFromPattern:
     """Tests for get_logs_from_pattern() function."""
 

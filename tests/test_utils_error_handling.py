@@ -9,7 +9,7 @@ import pytest
 from datetime import datetime, timezone
 from ingest.utils import load_fail, load_success
 
-
+@pytest.mark.integration
 class TestLoadFail:
     """Tests for load_fail() function that marks fetchlogs as failed."""
 
@@ -163,7 +163,7 @@ class TestLoadFail:
         count = db_cursor.fetchone()[0]
         assert count == 0, "No rows should be affected"
 
-
+@pytest.mark.integration
 class TestLoadSuccess:
     """Tests for load_success() function that marks fetchlogs as successful."""
 

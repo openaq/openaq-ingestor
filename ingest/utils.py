@@ -755,8 +755,8 @@ def upsert_fetchlogs(keys: list, connection=None):
     with connection.cursor() as cursor:
         cursor.execute(
             """
-            INSERT INTO fetchlogs (key, loaded_datetime, jobs, batch_uuid)
-            SELECT unnest(%s::text[]), CURRENT_TIMESTAMP, 1, %s
+            INSERT INTO fetchlogs (key, loaded_datetime, jobs, batch_uuid, init_datetime)
+            SELECT unnest(%s::text[]), CURRENT_TIMESTAMP, 1, %s, now()
             ON CONFLICT (key) DO UPDATE
             SET batch_uuid = EXCLUDED.batch_uuid
             RETURNING fetchlogs.fetchlogs_id

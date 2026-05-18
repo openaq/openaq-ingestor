@@ -23,7 +23,8 @@ from ingest.utils import (
 
 logger = logging.getLogger('local')
 
-
+def load_localfile(path: str):
+    print(filepath)
 
 def main():
     """load files locally"""
@@ -37,8 +38,9 @@ def main():
     parser.add_argument('--prefix', type=str, help='file limit to ingest', default='')
 
     mode_group = parser.add_mutually_exclusive_group(required=True)
-    mode_group.add_argument('--id', type=int, help='key of the file to load')
-    mode_group.add_argument('--key', type=str, help='id of the file to load')
+    mode_group.add_argument('--id', type=int, help='id of the file to load')
+    mode_group.add_argument('--key', type=str, help='key of the file to load')
+    mode_group.add_argument('--file', type=str, help='path to the local file to load')
     mode_group.add_argument('--batch', type=str, help='batch uuid of files to load')
     mode_group.add_argument('--bucket', type=str, help='S3 location to lookup')
 
@@ -63,6 +65,9 @@ def main():
     elif args.key is not None:
         # load via key
         rows = load_fetchlogs(pattern=args.key, limit=1, force=True)
+    elif args.file is not None:
+        # check for local file
+        rows = upsert_fetchlogs([args.file])
     elif args.batch is not None:
         # load via batch
         rows = load_fetchlogs(batch=args.batch, limit=args.limit, force=True)

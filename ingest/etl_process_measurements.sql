@@ -4,6 +4,7 @@ DECLARE
 __process_start timestamptz := clock_timestamp();
 __total_measurements int;
 __inserted_measurements int;
+__inserted_nulls int;
 __rejected_measurements int := 0;
 __rejected_nodes int := 0;
 __total_nodes int := 0;
@@ -60,16 +61,19 @@ WITH staged_sensors AS (
 ), ranked_sensors AS (
   SELECT s.sensors_id
 	, s.source_id
+  , s.measurands_id
 	, RANK() OVER (PARTITION BY s.source_id ORDER BY added_on ASC) as rnk
 	FROM sensors s
 	JOIN staged_sensors m ON (s.source_id = m.ingest_id)
 ), active_sensors AS (
 	SELECT source_id
 	, sensors_id
+  , measurands_id
 	FROM ranked_sensors
 	WHERE rnk = 1)
 	UPDATE staging_measurements
 	SET sensors_id=s.sensors_id
+  , measurands_id=s.measurands_id
 	FROM active_sensors s
 	WHERE s.source_id=ingest_id;
 
@@ -130,6 +134,7 @@ FROM inserts;
 -- try again to find the sensors
 UPDATE staging_measurements
 SET sensors_id=s.sensors_id
+  , measurands_id = s.measurands_id
 FROM sensors s
 WHERE s.source_id=ingest_id
 AND staging_measurements.sensors_id IS NULL;
@@ -157,6 +162,72 @@ RETURNING 1)
 SELECT COUNT(1) INTO __rejected_measurements
 FROM r;
 
+-- flag the bad data based on our measurand limits
+-- then consolidate the flags into events and add them to the staging table
+WITH flagged_measurements AS (
+  UPDATE staging_measurements m
+  SET value_original = value
+  , value = NULL
+  FROM measurands p
+  WHERE m.measurands_id = p.measurands_id
+  AND p.upper_limit IS NOT NULL
+  AND p.lower_limit IS NOT NULL
+  AND (m.value > p.upper_limit OR m.value < p.lower_limit)
+  RETURNING ingest_id, sensors_id, datetime
+), flagged_measurement_events AS (
+  SELECT ingest_id
+  , sensors_id
+  , datetime - '3600s'::interval as datetime_from
+  , datetime as datetime_to
+  , CASE WHEN datetime - lag(datetime) OVER (
+    PARTITION BY sensors_id ORDER BY datetime
+  ) > make_interval(secs => 3600 + 1)
+  THEN 1 ELSE 0 END AS flag_event
+  FROM flagged_measurements
+), pending_flags AS (
+  SELECT ingest_id
+  , sensors_id
+  , tstzrange(MIN(datetime_from), MAX(datetime_to), '[]') as period
+  FROM flagged_measurement_events
+  GROUP BY ingest_id, sensors_id, flag_event
+) INSERT INTO staging_flags (sensor_ingest_id, sensors_id, period, flags_id, flag_types_id, sensor_nodes_id)
+  SELECT ingest_id
+  , pf.sensors_id
+  , pf.period
+  , f.flags_id
+  , 4 -- this is the limits flag
+  , sy.sensor_nodes_id
+  FROM pending_flags pf
+  JOIN sensors s ON (s.sensors_id = pf.sensors_id)
+  JOIN sensor_systems sy ON (sy.sensor_systems_id = s.sensor_systems_id)
+  LEFT JOIN flags f ON (
+        f.period && pf.period
+        AND f.sensors_ids @> ARRAY[pf.sensors_id]
+        AND f.flag_types_id = 4);
+
+
+ -- add the new flags to the flag table
+INSERT INTO flags (flag_types_id, sensor_nodes_id, sensors_ids, period, note)
+  SELECT flag_types_id
+  , sensor_nodes_id
+  , ARRAY[sensors_id]
+  , period
+  , 'Added as part of ingestion'
+  FROM staging_flags
+  WHERE flag_types_id IS NOT NULL
+  AND sensor_nodes_id IS NOT NULL
+  AND flags_id IS NULL;
+
+
+-- And then update any that need to be updated
+ UPDATE flags fm
+  SET period = sf.period + fm.period
+  , note = COALESCE(sf.note, fm.note)
+  , modified_on = now()
+  FROM staging_flags sf
+  WHERE sf.flags_id = fm.flags_id;
+
+
 -- restart the clock to measure just inserts
 __process_start := clock_timestamp();
 
@@ -165,6 +236,7 @@ INSERT INTO measurements (
     sensors_id,
     datetime,
     value,
+    value_original,
     lon,
     lat
 ) SELECT
@@ -172,30 +244,34 @@ INSERT INTO measurements (
     sensors_id,
     datetime,
     value,
+    value_original,
     lon,
     lat
 FROM staging_measurements
 WHERE sensors_id IS NOT NULL
 ON CONFLICT DO NOTHING
-RETURNING sensors_id, datetime, value, lat, lon
+RETURNING sensors_id, datetime, value, value_original, lat, lon
 ), inserted as (
-   INSERT INTO staging_inserted_measurements (sensors_id, datetime, value, lon, lat, fetchlogs_id)
+   INSERT INTO staging_inserted_measurements (sensors_id, datetime, value, value_original, lon, lat, fetchlogs_id)
    SELECT i.sensors_id
    , i.datetime
    , i.value
+   , i.value_original
    , i.lon
    , i.lat
    , s.fetchlogs_id
    FROM inserts i
    JOIN staging_measurements s ON (i.sensors_id = s.sensors_id AND i.datetime = s.datetime)
-   RETURNING sensors_id, datetime
+   RETURNING sensors_id, datetime, value
 )
 SELECT MIN(datetime)
 , MAX(datetime)
 , COUNT(1)
+, SUM((value IS NULL)::int)
 INTO __inserted_start_datetime
 , __inserted_end_datetime
 , __inserted_measurements
+, __inserted_nulls
 FROM inserted;
 
 __insert_time_ms := 1000 * (extract(epoch FROM clock_timestamp() - __process_start));
@@ -226,50 +302,9 @@ WHERE inserted.fetchlogs_id = fetchlogs.fetchlogs_id;
 -- track the time required to update cache tables
 __process_start := clock_timestamp();
 
--- -- Now we can use those staging_inserted_measurements to update the cache tables
--- INSERT INTO sensors_latest (
---   sensors_id
---   , datetime
---   , value
---   , lat
---   , lon
---   )
--- ---- identify the row that has the latest value
--- WITH numbered AS (
---   SELECT sensors_id
---    , datetime
---    , value
---    , lat
---    , lon
---    , row_number() OVER (PARTITION BY sensors_id ORDER BY datetime DESC) as rn
---   FROM staging_inserted_measurements
--- ), latest AS (
--- ---- only insert those rows
---   SELECT sensors_id
---    , datetime
---    , value
---    , lat
---    , lon
---   FROM numbered
---   WHERE rn = 1
--- )
--- SELECT l.sensors_id
--- , l.datetime
--- , l.value
--- , l.lat
--- , l.lon
--- FROM latest l
--- LEFT JOIN sensors_latest sl ON (l.sensors_id = sl.sensors_id)
--- WHERE sl.sensors_id IS NULL
--- OR l.datetime > sl.datetime
--- ON CONFLICT (sensors_id) DO UPDATE
--- SET datetime = EXCLUDED.datetime
--- , value = EXCLUDED.value
--- , lat = EXCLUDED.lat
--- , lon = EXCLUDED.lon
--- , modified_on = now()
--- --, fetchlogs_id = EXCLUDED.fetchlogs_id
--- ;
+
+-- add the exceedance flags
+
 -- update the exceedances
 INSERT INTO sensor_exceedances (sensors_id, threshold_value, datetime_latest)
   SELECT
@@ -298,7 +333,7 @@ INSERT INTO sensors_rollup (
   , value_max
   , geom_latest
   )
----- identify the row that has the latest value
+---- identify the row that has the latest non-null value
 WITH numbered AS (
   SELECT sensors_id
    , datetime
@@ -311,6 +346,7 @@ WITH numbered AS (
    , stddev(value) OVER (PARTITION BY sensors_id) as value_sd
    , row_number() OVER (PARTITION BY sensors_id ORDER BY datetime DESC) as rn
   FROM staging_inserted_measurements
+  WHERE value IS NOT NULL
 ), latest AS (
 ---- only insert those rows
   SELECT sensors_id

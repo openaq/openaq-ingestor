@@ -365,6 +365,13 @@ FROM sensors s
 JOIN sensor_systems sy ON (s.sensor_systems_id = sy.sensor_systems_id)
 WHERE staging_flags.sensor_ingest_id = s.source_id;
 
+-- Now we match any of teh sensor node flags
+UPDATE staging_flags
+SET sensor_nodes_id = n.sensor_nodes_id
+FROM staging_sensornodes n
+WHERE staging_flags.sensor_ingest_id = n.ingest_id
+AND staging_flags.sensor_nodes_id IS NULL;
+
 -- and then get the right flags_id
 UPDATE staging_flags
 SET flag_types_id = ft.flag_types_id
@@ -382,7 +389,10 @@ UPDATE staging_flags sf
   -- the periods touch or overlap
   AND fm.period && sf.period
   -- and the flagged record sensors contains the current sensors
-  AND fm.sensors_ids @> ARRAY[sf.sensors_id];
+  AND (
+    (sf.sensors_id IS NULL AND fm.sensors_ids IS NULL) OR
+    fm.sensors_ids @> ARRAY[sf.sensors_id]
+  );
 
 -- and finally we will insert the new flags
 INSERT INTO flags (flag_types_id, sensor_nodes_id, sensors_ids, period, note)
@@ -395,6 +405,7 @@ INSERT INTO flags (flag_types_id, sensor_nodes_id, sensors_ids, period, note)
   WHERE flag_types_id IS NOT NULL
   AND sensor_nodes_id IS NOT NULL
   AND flags_id IS NULL;
+
 
 -- And then update any that need to be updated
  UPDATE flags fm
