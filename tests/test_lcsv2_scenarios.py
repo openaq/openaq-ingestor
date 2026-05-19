@@ -147,10 +147,11 @@ class TestIngestDataScenarios:
                   SET source_id = EXCLUDED.source_id
                   RETURNING sensor_systems_id
                 ), inserted_sensor AS (
-                  INSERT INTO sensors (sensor_systems_id, measurands_id, source_id)
+                  INSERT INTO sensors (sensor_systems_id, measurands_id, source_id, data_averaging_period_seconds)
                   SELECT sensor_systems_id
                   , 2 -- pm25
                   , 'testing-site1-pm25'
+                  , 3600
                   FROM inserted_system
                   ON CONFLICT (source_id) DO UPDATE
                   SET measurands_id = EXCLUDED.measurands_id

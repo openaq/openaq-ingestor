@@ -177,13 +177,14 @@ WITH flagged_measurements AS (
 ), flagged_measurement_events AS (
   SELECT ingest_id
   , sensors_id
-  , datetime - '3600s'::interval as datetime_from
+  , datetime - make_interval(secs => data_averaging_period_seconds)  as datetime_from
   , datetime as datetime_to
   , CASE WHEN datetime - lag(datetime) OVER (
     PARTITION BY sensors_id ORDER BY datetime
   ) > make_interval(secs => 3600 + 1)
   THEN 1 ELSE 0 END AS flag_event
   FROM flagged_measurements
+  JOIN sensors USING (sensors_id)
 ), pending_flags AS (
   SELECT ingest_id
   , sensors_id
