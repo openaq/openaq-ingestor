@@ -167,7 +167,7 @@ class TestIngestDataScenarios:
             existing = cursor.fetchone()
 
             ## now we dump or our data for ingest
-            client.dump(load=True)
+            client.dump()
 
             # Verify node data integrity
             cursor.execute("""
