@@ -149,13 +149,16 @@ class TestIngestDataScenarios:
                 ), inserted_sensor AS (
                   INSERT INTO sensors (sensor_systems_id, measurands_id, source_id, data_averaging_period_seconds)
                   SELECT sensor_systems_id
-                  , 2 -- pm25
-                  , 'testing-site1-pm25'
-                  , 3600
-                  FROM inserted_system
+                  , v.measurands_id
+                  , v.source_id
+                  , v.data_averaging_period_seconds
+                  FROM inserted_system, (VALUES
+                       (1, 'testing-site1-pm10', 3600),
+                       (2, 'testing-site1-pm25', 3600)
+                  ) as v(measurands_id, source_id, data_averaging_period_seconds)
                   ON CONFLICT (source_id) DO UPDATE
                   SET measurands_id = EXCLUDED.measurands_id
-                  RETURNING sensors_id
+                  RETURNING sensors_id, source_id
                 ) INSERT INTO flags (sensor_nodes_id, sensors_ids, flag_types_id, period, note)
                   SELECT sensor_nodes_id
                   , ARRAY[sensors_id]
@@ -163,6 +166,7 @@ class TestIngestDataScenarios:
                   , tstzrange('2024-12-31 23:00:00', '2025-01-01 00:00:00', '[]')
                   , 'test flag to join'
                   FROM inserted_sensor, inserted_node
+                  WHERE inserted_sensor.source_id = 'testing-site1-pm25'
                   RETURNING flags_id;
                 """)
             existing = cursor.fetchone()
