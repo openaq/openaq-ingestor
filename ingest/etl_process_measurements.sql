@@ -16,7 +16,9 @@ __end_datetime timestamptz;
 __inserted_start_datetime timestamptz;
 __inserted_end_datetime timestamptz;
 __process_time_ms int;
+__flagging_time_ms int;
 __insert_time_ms int;
+__fetchlogs_time_ms int;
 __cache_time_ms int;
 __error_context text;
 __ingest_method text := 'lcs';
@@ -148,23 +150,8 @@ SELECT COUNT(DISTINCT sensors_id)
 INTO __total_nodes
 FROM staging_measurements;
 
-
 __process_time_ms := 1000 * (extract(epoch FROM clock_timestamp() - __process_start));
-
--- reject any missing. Most likely due to issues
--- with the measurand
-WITH r AS (
-INSERT INTO rejects (t,tbl,r,fetchlogs_id)
-SELECT
-    current_timestamp
-    , 'meas-missing-sensors-id'
-    , to_jsonb(staging_measurements)
-    , fetchlogs_id
-FROM staging_measurements
-WHERE sensors_id IS NULL
-RETURNING 1)
-SELECT COUNT(1) INTO __rejected_measurements
-FROM r;
+__process_start := clock_timestamp();
 
 
 -- flag the bad data based on our measurand limits
@@ -195,20 +182,26 @@ WITH flagged_measurements AS (
   , tstzrange(MIN(datetime_from), MAX(datetime_to), '[]') as period
   FROM flagged_measurement_events
   GROUP BY ingest_id, sensors_id, flag_event
+), relevant_flags AS (
+  -- Pre-filter the flags table to just what could possibly match
+  SELECT f.flags_id, f.period, f.sensors_ids
+  FROM flags f
+  WHERE f.flag_types_id = 4
+  AND f.sensors_ids && (SELECT array_agg(DISTINCT sensors_id) FROM pending_flags)
+  AND f.period && (SELECT tstzrange(MIN(lower(period)), MAX(upper(period)), '[]') FROM pending_flags)
 ) INSERT INTO staging_flags (sensor_ingest_id, sensors_id, period, flags_id, flag_types_id, sensor_nodes_id)
   SELECT ingest_id
   , pf.sensors_id
   , pf.period
-  , f.flags_id
+  , rf.flags_id
   , 4 -- this is the limits flag
   , sy.sensor_nodes_id
   FROM pending_flags pf
   JOIN sensors s ON (s.sensors_id = pf.sensors_id)
   JOIN sensor_systems sy ON (sy.sensor_systems_id = s.sensor_systems_id)
-  LEFT JOIN flags f ON (
-        f.period && pf.period
-        AND f.sensors_ids @> ARRAY[pf.sensors_id]
-        AND f.flag_types_id = 4);
+  LEFT JOIN relevant_flags rf ON (
+        rf.period && pf.period
+        AND rf.sensors_ids @> ARRAY[pf.sensors_id]);
 
 
 
@@ -233,6 +226,24 @@ INSERT INTO flags (flag_types_id, sensor_nodes_id, sensors_ids, period, note)
   FROM staging_flags sf
   WHERE sf.flags_id = fm.flags_id;
 
+
+  __flagging_time_ms := 1000 * (extract(epoch FROM clock_timestamp() - __process_start));
+
+
+-- reject any missing. Most likely due to issues
+-- with the measurand
+WITH r AS (
+INSERT INTO rejects (t,tbl,r,fetchlogs_id)
+SELECT
+    current_timestamp
+    , 'meas-missing-sensors-id'
+    , to_jsonb(staging_measurements)
+    , fetchlogs_id
+FROM staging_measurements
+WHERE sensors_id IS NULL
+RETURNING 1)
+SELECT COUNT(1) INTO __rejected_measurements
+FROM r;
 
 -- restart the clock to measure just inserts
 __process_start := clock_timestamp();
@@ -282,28 +293,38 @@ FROM inserted;
 
 __insert_time_ms := 1000 * (extract(epoch FROM clock_timestamp() - __process_start));
 
+__process_start := clock_timestamp();
+
 -- mark the fetchlogs as done
-WITH inserted AS (
-  SELECT m.fetchlogs_id
-  , COUNT(m.*) as n_records
-  , COUNT(t.*) as n_inserted
-  , MIN(m.datetime) as fr_datetime
-  , MAX(m.datetime) as lr_datetime
-  , MIN(t.datetime) as fi_datetime
-  , MAX(t.datetime) as li_datetime
-  FROM staging_measurements m
-  LEFT JOIN staging_inserted_measurements t ON (t.sensors_id = m.sensors_id AND t.datetime = m.datetime)
-  GROUP BY m.fetchlogs_id)
+WITH measurement_counts AS (
+  SELECT fetchlogs_id
+  , COUNT(*) as n_records
+  , MIN(datetime) as fr_datetime
+  , MAX(datetime) as lr_datetime
+  FROM staging_measurements
+  GROUP BY fetchlogs_id
+), inserted_counts AS (
+  SELECT fetchlogs_id
+  , COUNT(*) as n_inserted
+  , MIN(datetime) as fi_datetime
+  , MAX(datetime) as li_datetime
+  FROM staging_inserted_measurements
+  GROUP BY fetchlogs_id
+)
 UPDATE fetchlogs
 SET completed_datetime = CURRENT_TIMESTAMP
-, inserted = COALESCE(n_inserted, 0)
-, records = COALESCE(n_records, 0)
-, first_recorded_datetime = fr_datetime
-, last_recorded_datetime = lr_datetime
-, first_inserted_datetime = fi_datetime
-, last_inserted_datetime = li_datetime
-FROM inserted
-WHERE inserted.fetchlogs_id = fetchlogs.fetchlogs_id;
+, inserted = COALESCE(i.n_inserted, 0)
+, records = COALESCE(m.n_records, 0)
+, first_recorded_datetime = m.fr_datetime
+, last_recorded_datetime = m.lr_datetime
+, first_inserted_datetime = i.fi_datetime
+, last_inserted_datetime = i.li_datetime
+FROM measurement_counts m
+LEFT JOIN inserted_counts i USING (fetchlogs_id)
+WHERE m.fetchlogs_id = fetchlogs.fetchlogs_id;
+
+
+__fetchlogs_time_ms := 1000 * (extract(epoch FROM clock_timestamp() - __process_start));
 
 -- track the time required to update cache tables
 __process_start := clock_timestamp();
@@ -311,7 +332,7 @@ __process_start := clock_timestamp();
 
 -- add the exceedance flags
 
--- update the exceedances
+--update the exceedances
 INSERT INTO sensor_exceedances (sensors_id, threshold_value, datetime_latest)
   SELECT
   m.sensors_id
@@ -530,19 +551,21 @@ INSERT INTO ingest_stats (
  , ingested_on = EXCLUDED.ingested_on;
 
 
-RAISE NOTICE 'inserted-measurements: %, inserted-from: %, inserted-to: %, rejected-measurements: %, exported-sensor-days: %, process-time-ms: %, insert-time-ms: %, cache-time-ms: %, source: lcs'
+RAISE NOTICE 'inserted-measurements: %, inserted-from: %, inserted-to: %, rejected-measurements: %, exported-sensor-days: %, process-time-ms: %, flagging-time-ms: %, insert-time-ms: %, fetchlogs-time-ms: %, cache-time-ms: %, source: lcs'
       , __inserted_measurements
       , __inserted_start_datetime
       , __inserted_end_datetime
       , __rejected_measurements
       , __exported_days
       , __process_time_ms
+      , __flagging_time_ms
       , __insert_time_ms
+      , __fetchlogs_time_ms
       , __cache_time_ms;
 
 
 EXCEPTION WHEN OTHERS THEN
- GET STACKED DIAGNOSTICS __error_context = PG_EXCEPTION_CONTEXT;
- RAISE WARNING 'Failed to ingest measurements: %, %', SQLERRM, __error_context;
+GET STACKED DIAGNOSTICS __error_context = PG_EXCEPTION_CONTEXT;
+RAISE WARNING 'Failed to ingest measurements: %, %', SQLERRM, __error_context;
 
 END $$;

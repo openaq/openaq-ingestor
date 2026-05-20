@@ -9,7 +9,6 @@ import logging
 from time import time
 import csv
 
-
 from ingest.lcsV2 import (
     IngestClient,
 )
@@ -82,6 +81,7 @@ def main():
 
 
     logger.info(f"loading {len(rows)} files")
+
     if len(rows)>0:
         start_time = time()
         # get a client object to hold all the data
@@ -91,7 +91,7 @@ def main():
         # and finally we can dump it all into the db
         client.dump()
         # write to the log
-        logger.info("load_measurements:get: %s keys; %s measurements; %s locations; %0.4f seconds",
+        logger.info("load_measurements:get: %s keys; %s measurements; %s locations; completed in %0.4f seconds",
                     len(client.keys), len(client.measurements), len(client.nodes), time() - start_time)
 
 

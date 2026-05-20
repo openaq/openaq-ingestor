@@ -32,6 +32,8 @@ from .utils import (
 
 app = typer.Typer()
 dir_path = os.path.dirname(os.path.realpath(__file__))
+VERBOSE_LEVEL = 5
+logging.addLevelName(VERBOSE_LEVEL, "VERBOSE")
 
 logger = logging.getLogger(__name__)
 
@@ -366,7 +368,7 @@ class IngestClient:
                     if notice.startswith("WARNING"):
                         logger.warn(f"etl_process_measurements {notice.rstrip()}")
                     else:
-                        logger.debug(f"etl_process_measurements {notice.rstrip()}")
+                        logger.info(f"etl_process_measurements {notice.rstrip()}")
 
         self.close()
 
@@ -736,7 +738,7 @@ class IngestClient:
             for k, v in m.items():
                 # pass the whole measure
                 col, value = self.process(k, m, self.measurement_map)
-                logger.debug(f"Mapping data: {k}/{v} = {col}/{value}")
+                logger.log(VERBOSE_LEVEL, f"Mapping data: {k}/{v} = {col}/{value}")
                 if col is not None:
                     meas[col] = value
 
