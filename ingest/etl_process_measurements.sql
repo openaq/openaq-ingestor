@@ -62,6 +62,7 @@ WITH staged_sensors AS (
   SELECT s.sensors_id
 	, s.source_id
   , s.measurands_id
+  , s.data_averaging_period_seconds
 	, RANK() OVER (PARTITION BY s.source_id ORDER BY added_on ASC) as rnk
 	FROM sensors s
 	JOIN staged_sensors m ON (s.source_id = m.ingest_id)
@@ -69,11 +70,14 @@ WITH staged_sensors AS (
 	SELECT source_id
 	, sensors_id
   , measurands_id
+  , data_averaging_period_seconds
 	FROM ranked_sensors
 	WHERE rnk = 1)
 	UPDATE staging_measurements
 	SET sensors_id=s.sensors_id
   , measurands_id=s.measurands_id
+  , sensor_averaging_interval=make_interval(secs => s.data_averaging_period_seconds + 1)
+  , datetime_from=datetime - make_interval(secs => s.data_averaging_period_seconds)
 	FROM active_sensors s
 	WHERE s.source_id=ingest_id;
 
@@ -162,6 +166,7 @@ RETURNING 1)
 SELECT COUNT(1) INTO __rejected_measurements
 FROM r;
 
+
 -- flag the bad data based on our measurand limits
 -- then consolidate the flags into events and add them to the staging table
 WITH flagged_measurements AS (
@@ -173,18 +178,17 @@ WITH flagged_measurements AS (
   AND p.upper_limit IS NOT NULL
   AND p.lower_limit IS NOT NULL
   AND (m.value > p.upper_limit OR m.value < p.lower_limit)
-  RETURNING ingest_id, sensors_id, datetime
+  RETURNING ingest_id, sensors_id, datetime, datetime_from, sensor_averaging_interval
 ), flagged_measurement_events AS (
   SELECT ingest_id
   , sensors_id
-  , datetime - make_interval(secs => s.data_averaging_period_seconds)  as datetime_from
+  , datetime_from
   , datetime as datetime_to
   , CASE WHEN datetime - lag(datetime) OVER (
     PARTITION BY sensors_id ORDER BY datetime
-  ) > make_interval(secs => (s.data_averaging_period_seconds + 1))
+  ) > sensor_averaging_interval
   THEN 1 ELSE 0 END AS flag_event
-  FROM flagged_measurements
-  JOIN sensors s USING (sensors_id)
+  FROM flagged_measurements fm
 ), pending_flags AS (
   SELECT ingest_id
   , sensors_id
