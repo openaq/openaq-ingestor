@@ -6,6 +6,7 @@ from .resources import Resources
 from .utils import get_logs_from_pattern, load_fetchlogs
 from .lcs import load_metadata_db
 from .lcsV2 import IngestClient
+from .fetch import load_db
 from time import time
 import json
 
@@ -168,7 +169,8 @@ def cronhandler(event, context):
                     loaded > 0
                     and (time() - start_time) < timeout
             ):
-                loaded = load_measurements_db(realtime_limit, ascending, pattern='^realtime-gzipped/.*\\.ndjson.gz$')
+                loaded = load_db(realtime_limit, ascending)
+                #loaded = load_measurements_db(realtime_limit, ascending, pattern='^realtime-gzipped/.*\\.ndjson.gz$')
                 cnt += loaded
                 logger.info(
                     "loaded %s fetch records, timer: %0.4f",
