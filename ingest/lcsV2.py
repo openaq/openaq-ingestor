@@ -445,7 +445,6 @@ class IngestClient:
             for rw in csv.reader(content.split("\n")):
                 self.add_measurement(rw)
         elif is_ndjson:
-            logger.debug(len(content.split('\n')))
             measures = []
             for obj in content.split('\n'):
                 if obj != "":
