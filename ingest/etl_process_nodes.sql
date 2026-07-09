@@ -75,7 +75,6 @@ WHERE is_new
 
 
 -- we are going to update the source_id  where we are matching via geometry
--- for ingest-id matches this should not matter.
 UPDATE sensor_nodes
 SET source_id = COALESCE(s.source_id, sensor_nodes.source_id)
   , geom = COALESCE(s.geom, sensor_nodes.geom)
@@ -86,7 +85,9 @@ SET source_id = COALESCE(s.source_id, sensor_nodes.source_id)
   , metadata = COALESCE(s.metadata, '{}') || COALESCE(sensor_nodes.metadata, '{}')
   , modified_on = now()
 FROM staging_sensornodes s
-WHERE sensor_nodes.sensor_nodes_id = s.sensor_nodes_id;
+WHERE sensor_nodes.sensor_nodes_id = s.sensor_nodes_id
+--AND staging_sensornodes.matching_method = 'source-spatial'
+  ;
 
 
 -- And now we insert those into the sensor nodes table

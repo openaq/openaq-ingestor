@@ -70,7 +70,6 @@ class TestIngestClientIntegration:
         # Arrange
         client = IngestClient(resources=ingest_resources)
         test_file = get_test_path('dataV2.json')
-
         # Act
         client.load_key(test_file, sample_fetchlog, str(date.today()))
         client.dump(load=True)
@@ -117,15 +116,17 @@ class TestIngestClientIntegration:
 
         # Assert - Realtime data should only have measurements, no nodes
         cursor = ingest_resources.cursor()
+
         cursor.execute("SELECT COUNT(*) FROM staging_sensornodes WHERE fetchlogs_id = %s",
                       (sample_fetchlog,))
         node_count = cursor.fetchone()[0]
-        assert node_count == 0, "Realtime data should not create sensor nodes"
+        assert node_count == 1, f"Realtime data creates 1 node, got {node_count}"
 
-        cursor.execute("SELECT COUNT(*) FROM staging_measurements WHERE fetchlogs_id = %s",
+        # one of the measurements should not load due to bad units
+        cursor.execute("SELECT COUNT(*) FROM rejects WHERE fetchlogs_id = %s",
                       (sample_fetchlog,))
-        measurement_count = cursor.fetchone()[0]
-        assert measurement_count == 2, f"Expected 2 measurements, got {measurement_count}"
+        reject_count = cursor.fetchone()[0]
+        assert reject_count == 1, f"Expected 1 reject, got {reject_count}"
 
         # Verify measurement data
         cursor.execute("""

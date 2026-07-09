@@ -156,7 +156,7 @@ class TestIngestDataScenarios:
                        (1, 'testing-site1-pm10', 3600),
                        (2, 'testing-site1-pm25', 3600)
                   ) as v(measurands_id, source_id, data_averaging_period_seconds)
-                  ON CONFLICT (source_id) DO UPDATE
+                  ON CONFLICT (source_id, measurands_id, sensor_systems_id) DO UPDATE
                   SET measurands_id = EXCLUDED.measurands_id
                   RETURNING sensors_id, source_id
                 ) INSERT INTO flags (sensor_nodes_id, sensors_ids, flag_types_id, period, note)

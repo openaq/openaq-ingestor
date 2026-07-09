@@ -165,9 +165,9 @@ WITH flagged_measurements AS (
   AND p.upper_limit IS NOT NULL
   AND p.lower_limit IS NOT NULL
   AND (m.value > p.upper_limit OR m.value < p.lower_limit)
-  RETURNING ingest_id, sensors_id, datetime, datetime_from, sensor_averaging_interval
+  RETURNING m.ingest_id as sensor_ingest_id, sensors_id, datetime, datetime_from, sensor_averaging_interval
 ), flagged_measurement_events AS (
-  SELECT ingest_id
+  SELECT sensor_ingest_id
   , sensors_id
   , datetime_from
   , datetime as datetime_to
@@ -177,20 +177,22 @@ WITH flagged_measurements AS (
   THEN 1 ELSE 0 END AS flag_event
   FROM flagged_measurements fm
 ), pending_flags AS (
-  SELECT ingest_id
+  SELECT sensor_ingest_id
   , sensors_id
   , tstzrange(MIN(datetime_from), MAX(datetime_to), '[]') as period
   FROM flagged_measurement_events
-  GROUP BY ingest_id, sensors_id, flag_event
+  GROUP BY sensor_ingest_id, sensors_id, flag_event
 ), relevant_flags AS (
   -- Pre-filter the flags table to just what could possibly match
-  SELECT f.flags_id, f.period, f.sensors_ids
+  SELECT f.flags_id
+  , f.period
+  , f.sensors_ids
   FROM flags f
   WHERE f.flag_types_id = 4
   AND f.sensors_ids && (SELECT array_agg(DISTINCT sensors_id) FROM pending_flags)
   AND f.period && (SELECT tstzrange(MIN(lower(period)), MAX(upper(period)), '[]') FROM pending_flags)
 ) INSERT INTO staging_flags (sensor_ingest_id, sensors_id, period, flags_id, flag_types_id, sensor_nodes_id)
-  SELECT ingest_id
+  SELECT pf.sensor_ingest_id
   , pf.sensors_id
   , pf.period
   , rf.flags_id

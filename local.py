@@ -8,6 +8,8 @@ import psycopg2
 import logging
 from time import time
 import csv
+import psutil
+
 
 from ingest.lcsV2 import (
     IngestClient,
@@ -21,6 +23,10 @@ from ingest.utils import (
 
 
 logger = logging.getLogger('local')
+
+def log_memory(label=""):
+    mem_mb = psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024
+    logger.info(f"Memory {label}: {mem_mb:.1f} MB")
 
 def load_localfile(path: str):
     print(filepath)
@@ -88,8 +94,10 @@ def main():
         client = IngestClient()
         # load all the keys
         client.load_keys(rows)
+        log_memory("RAM after load")
         # and finally we can dump it all into the db
-        client.dump()
+        client.dump(load=True)
+        log_memory("RAM after dump")
         # write to the log
         logger.info("load_measurements:get: %s keys; %s measurements; %s locations; completed in %0.4f seconds",
                     len(client.keys), len(client.measurements), len(client.nodes), time() - start_time)
