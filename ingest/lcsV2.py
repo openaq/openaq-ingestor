@@ -700,6 +700,7 @@ class IngestClient:
             if 'model' not in system.keys():
                 system['model'] = 'default'
 
+            logger.debug(f"Adding system {id}")
             self.systems[id] = system
 
 
@@ -757,6 +758,7 @@ class IngestClient:
             # prevent adding the node more than once
             # this does not save processing time of course
             if ingest_id not in self.nodes:
+                logger.debug(f"Adding node {ingest_id}")
                 node["metadata"] = orjson.dumps(metadata).decode()
                 self.nodes[ingest_id] = node
             # now look for systems
