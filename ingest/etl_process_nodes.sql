@@ -276,10 +276,8 @@ AND sensors.source_id = staging_sensors.ingest_id;
 
 UPDATE staging_sensors
 SET measurands_id = m.measurands_id
-FROM (SELECT measurand, MIN(measurands_id) AS measurands_id FROM measurands GROUP BY measurand) as m
-WHERE staging_sensors.measurand=m.measurand
---AND staging_sensors.units=measurands.units
-;
+FROM (SELECT key,  measurands_id FROM measurands_map_view) as m
+WHERE staging_sensors.measurand=m.key;
 
 
 WITH r AS (
