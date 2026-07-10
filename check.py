@@ -83,6 +83,7 @@ def print_staging_summary(connection, id: int = -1):
         cursor.execute("""
             SELECT COUNT(*) FROM staging_sensornodes
             WHERE sensor_nodes_id IS NOT NULL
+            AND NOT is_new
         """)
         matched_nodes = cursor.fetchone()[0]
         print(f"   • Matched existing nodes: {matched_nodes}/{staging_nodes}")
