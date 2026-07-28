@@ -7,26 +7,6 @@ from ingest import settings
 from psycopg2.extras import RealDictCursor
 
 
-def create_test_file(tmp_path, name: str, content: str) -> str:
-    """Write content to a temp file and return its path."""
-    p = tmp_path / name
-    p.write_text(content)
-    return str(p)
-
-
-@pytest.fixture
-def sample_fetchlog(db_cursor, clean_fetchlogs):
-    """Create a sample fetchlog record for testing."""
-    test_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-    db_cursor.execute("""
-        INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
-        VALUES ('test-data.json', %s, %s, NULL, false)
-        RETURNING fetchlogs_id
-    """, (test_time, test_time))
-    fetchlog_id = db_cursor.fetchone()[0]
-    return fetchlog_id
-
-
 ## I have added the interval keys to the lcs file shape for the sake of simplicity
 ## we could also add them to the lcs adapters if those wont be converted to transform right away
 files = {
@@ -134,7 +114,7 @@ def test_all_shapes_are_converted(
     """Test that all data shapes are loaded to the client in the same way."""
     client = IngestClient(resources=ingest_resources)
     content = files.get(key)
-    test_file = create_test_file(tmp_path, key, content)
+    test_file = make_test_file(key, content)
     client.load_key(test_file, sample_fetchlog, str(date.today()))
 
     assert len(client.nodes) == 1
@@ -180,6 +160,7 @@ def test_all_shapes_are_converted(
         "ingest_id": "testing-station1-no",
         "measurand": "no",
         "status": "active",
+        "units": "ppb",
         "averaging_interval_seconds": 900,
         "logging_interval_seconds": 900,
         "metadata": "{}",
@@ -189,11 +170,14 @@ def test_all_shapes_are_converted(
             f"sensor.{field}: {sensor.get(field)!r} != {expected!r}"
         )
 
+    print(client.measurements[0])
+
     assert client.measurements[0] == [
         "testing-station1-no",
         "testing",
         "station1",
         "no",
+        "ppb",
         0.2,
         "2024-04-08T21:25:00.000Z",
         None,

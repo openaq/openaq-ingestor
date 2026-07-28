@@ -57,6 +57,7 @@ class TestIngestDataScenarios:
             assert node[3] == "Site #1"
 
 
+
     def test_ingest_updates_existing_node(
         self,
         ingest_resources,
@@ -100,6 +101,7 @@ class TestIngestDataScenarios:
             assert node[1] == "testing"
             assert node[2] == "site1"
             assert node[3] == "Site #1"
+
 
 
     def test_database_flags_exceedance_values(

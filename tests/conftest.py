@@ -3,11 +3,31 @@ import psycopg2
 import boto3
 from moto import mock_aws
 from pathlib import Path
+import os
+from unittest.mock import patch
 from datetime import datetime, timezone, timedelta
 import json
 
+from psycopg2.extras import RealDictCursor
 from ingest.settings import settings
 from ingest.resources import Resources
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--persist-db",
+        action="store_true",
+        default=False,
+        help="Commit test DB changes instead of rolling back (for debugging).",
+    )
+
+def pytest_configure(config):
+    if config.getoption("--persist-db"):
+        print("\n⚠️  --persist-db active: DB changes will be COMMITTED\n")
+
+@pytest.fixture(scope="function")
+def persist_db(request):
+    return request.config.getoption("--persist-db")
 
 
 @pytest.fixture(scope="session")
@@ -17,15 +37,18 @@ def test_data_dir():
 
 
 @pytest.fixture(scope="function")
-def db_connection():
+def db_connection(persist_db):
     """
     Provides fresh psycopg2 connection per test with automatic rollback.
     Uses transaction isolation to prevent side effects between tests.
     """
     conn = psycopg2.connect(settings.DATABASE_WRITE_URL)
-    conn.set_session(autocommit=False)  # Explicit transaction control
+    conn.set_session(autocommit=False)
     yield conn
-    conn.rollback()  # Rollback all changes after test
+    if persist_db:
+        conn.commit()
+    else:
+        conn.rollback()
     conn.close()
 
 
@@ -255,3 +278,257 @@ def mock_cronhandler_settings(mocker):
     mock_settings.REALTIME_LIMIT = 10
     mock_settings.PIPELINE_LIMIT = 10
     return mock_settings
+
+def _get_measurand_id(cursor, measurand: str, units: str = None):
+    """Look up measurands_id by name (and optionally units)."""
+    if units:
+        cursor.execute(
+            "SELECT measurands_id, units FROM measurands WHERE measurand = %s AND units = %s LIMIT 1",
+            (measurand, units),
+        )
+    else:
+        cursor.execute(
+            "SELECT measurands_id, units FROM measurands WHERE measurand = %s LIMIT 1",
+            (measurand,),
+        )
+    row = cursor.fetchone()
+    if not row:
+        raise ValueError(f"Measurand '{measurand}' (units={units}) not found in measurands table")
+    return row[0], row[1]
+
+
+def _create_node(cursor, node_spec: dict) -> dict:
+    source_name = node_spec.get("source_name", "testing")
+    source_id = node_spec.get("source_id") or node_spec.get("location") or f"{source_name}-node"
+    site_name = node_spec.get("site_name", source_id)
+    ismobile = node_spec.get("ismobile", False)
+
+    # Accept coordinates in a few shapes:
+    #   "coordinates": {"lat": 42.05, "lon": -123.04}
+    #   "coordinates": [lon, lat]
+    #   "lat": ..., "lon": ...
+    lat = lon = None
+    coords = node_spec.get("coordinates")
+    if isinstance(coords, dict):
+        lat = coords.get("lat") or coords.get("latitude")
+        lon = coords.get("lon") or coords.get("lng") or coords.get("longitude")
+    elif isinstance(coords, (list, tuple)) and len(coords) == 2:
+        lon, lat = coords
+    else:
+        lat = node_spec.get("lat") or node_spec.get("latitude")
+        lon = node_spec.get("lon") or node_spec.get("longitude")
+
+    geom_sql = "NULL"
+    geom_params = ()
+    if lat is not None and lon is not None:
+        geom_sql = "ST_SetSRID(ST_MakePoint(%s, %s), 4326)"
+        geom_params = (float(lon), float(lat))
+
+    cursor.execute(
+        f"""
+        INSERT INTO sensor_nodes (site_name, source_name, source_id, ismobile, geom)
+        VALUES (%s, %s, %s, %s, {geom_sql})
+        ON CONFLICT (source_name, source_id) DO UPDATE
+          SET site_name = EXCLUDED.site_name,
+              geom = EXCLUDED.geom
+        RETURNING sensor_nodes_id
+        """,
+        (site_name, source_name, source_id, ismobile, *geom_params),
+    )
+    sensor_nodes_id = cursor.fetchone()[0]
+
+    # Normalize: if "sensors" given at node level, wrap them in a default system
+    if "systems" in node_spec:
+        systems = node_spec["systems"]
+    elif "sensors" in node_spec:
+        systems = [{"sensors": node_spec["sensors"]}]
+    else:
+        systems = []
+
+    created_systems = []
+    for i, sys_spec in enumerate(systems):
+        sys_source_id = sys_spec.get("source_id", f"{source_id}-sys{i+1}" if len(systems) > 1 else source_id)
+
+        cursor.execute(
+            """
+            INSERT INTO sensor_systems (sensor_nodes_id, source_id)
+            VALUES (%s, %s)
+            ON CONFLICT (sensor_nodes_id, source_id) DO UPDATE
+              SET source_id = EXCLUDED.source_id
+            RETURNING sensor_systems_id
+            """,
+            (sensor_nodes_id, sys_source_id),
+        )
+        sensor_systems_id = cursor.fetchone()[0]
+
+        created_sensors = []
+        for sensor_spec in sys_spec.get("sensors", []):
+            measurand = sensor_spec["measurand"]
+            units = sensor_spec.get("units")
+            measurands_id, resolved_units = _get_measurand_id(cursor, measurand, units)
+
+            sensor_source_id = sensor_spec.get(
+                "source_id", f"{source_id}-{measurand}"
+            )
+            period = sensor_spec.get("period")  # data_averaging_period_seconds
+            logging_period = sensor_spec.get("logging_period", period)
+
+            cursor.execute(
+                """
+                INSERT INTO sensors (
+                    sensor_systems_id, measurands_id, source_id,
+                    data_averaging_period_seconds, data_logging_period_seconds
+                )
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (sensor_systems_id, measurands_id, source_id) DO UPDATE
+                  SET data_averaging_period_seconds = EXCLUDED.data_averaging_period_seconds
+                RETURNING sensors_id
+                """,
+                (sensor_systems_id, measurands_id, sensor_source_id, period, logging_period),
+            )
+            sensors_id = cursor.fetchone()[0]
+
+            created_sensors.append({
+                "sensors_id": sensors_id,
+                "source_id": sensor_source_id,
+                "measurand": measurand,
+                "units": resolved_units,
+                "measurands_id": measurands_id,
+            })
+
+        created_systems.append({
+            "sensor_systems_id": sensor_systems_id,
+            "source_id": sys_source_id,
+            "sensors": created_sensors,
+        })
+
+    return {
+        "sensor_nodes_id": sensor_nodes_id,
+        "source_name": source_name,
+        "source_id": source_id,
+        "site_name": site_name,
+        "systems": created_systems,
+    }
+
+
+@pytest.fixture
+def create_node(ingest_resources):
+    """
+    Fixture: returns a factory to create sensor_nodes with systems/sensors.
+
+    Usage:
+        def test_something(create_node):
+            node = create_node({
+                "site_name": "station1",
+                "source_name": "testing",
+                "source_id": "testing-station1",
+                "sensors": [{"period": 900, "measurand": "no"}],
+            })
+            assert node["sensor_nodes_id"] is not None
+            sensor_id = node["systems"][0]["sensors"][0]["sensors_id"]
+    """
+    def _factory(node_spec: dict) -> dict:
+        with ingest_resources.cursor() as cursor:
+            return _create_node(cursor, node_spec)
+    return _factory
+
+
+def get_test_path(relpath: str) -> str:
+    """Absolute path to a file in the tests/ directory."""
+    return os.path.join(os.path.dirname(__file__), relpath)
+
+
+@pytest.fixture
+def disable_temp_tables():
+    """Force staging tables (not TEMP) so tests can inspect them."""
+    with patch.object(settings.settings, "USE_TEMP_TABLES", False):
+        yield
+
+
+@pytest.fixture
+def sample_fetchlog(db_cursor, clean_fetchlogs):
+    """Insert a fetchlogs row and return its id."""
+    test_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    db_cursor.execute("""
+        INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
+        VALUES ('test-data.json', %s, %s, NULL, false)
+        RETURNING fetchlogs_id
+    """, (test_time, test_time))
+    return db_cursor.fetchone()[0]
+
+
+@pytest.fixture
+def make_test_file(tmp_path):
+    """
+    Write content to a temp file and return its path.
+
+    Usage:
+        path = make_test_file("realtime.ndjson", '{"foo": "bar"}')
+    """
+    def _make(name: str, content: str) -> str:
+        p = tmp_path / name
+        p.write_text(content)
+        return str(p)
+    return _make
+
+# Registry of named queries. Keeps SQL out of the fixture body
+# and makes it trivial to add new ones.
+_QUERIES = {
+    "rejects": """
+        SELECT *
+        FROM rejects
+        WHERE fetchlogs_id = %(fetchlogs_id)s
+    """,
+    "staged_sensor_nodes": """
+        SELECT ingest_id, source_id, source_name, site_name,
+               sensor_nodes_id, is_new, is_moved
+        FROM staging_sensornodes
+        ORDER BY ingest_id
+    """,
+    "staged_systems": """
+        SELECT ingest_id, sensor_systems_id, is_new
+        FROM staging_sensorsystems
+        ORDER BY ingest_id
+    """,
+    "staged_sensors": """
+        SELECT ingest_id, sensors_id, is_new, measurand, units, status
+        FROM staging_sensors
+        ORDER BY ingest_id
+    """,
+    "staged_measurements": """
+        SELECT m.*
+               , m2.units AS units_needed
+        FROM staging_measurements m
+        LEFT JOIN measurands m2 ON m.measurands_id = m2.measurands_id
+        ORDER BY m.ingest_id
+    """,
+    "sensors": """
+        SELECT s.sensors_id,
+               s.data_averaging_period_seconds,
+               s.data_logging_period_seconds,
+               m.measurand, m.units, s.source_id
+        FROM sensors s
+        JOIN measurands m USING (measurands_id)
+        ORDER BY s.source_id
+    """,
+}
+
+@pytest.fixture
+def get_object(ingest_resources):
+    """
+    Fetch rows from a named query.
+
+    Usage:
+        rows = get_object("staged_sensors")
+        rejects = get_object("rejects", fetchlogs_id=42)
+    """
+    def _fetch(name: str, **params):
+        if name not in _QUERIES:
+            raise ValueError(
+                f"Unknown query '{name}'. Available: {sorted(_QUERIES)}"
+            )
+        with ingest_resources.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(_QUERIES[name], params)
+            return cur.fetchall()
+
+    return _fetch

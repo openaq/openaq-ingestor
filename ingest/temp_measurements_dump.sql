@@ -43,6 +43,8 @@ CREATE {table} IF NOT EXISTS staging_measurements (
     source_name text NOT NULL,
     source_id text NOT NULL,
     measurand text NOT NULL,
+    units text,   -- the current units of the measurement
+    units_id int, -- the current units_id for the measurement
     sensors_id int,
     sensor_averaging_interval interval,
     measurands_id int,

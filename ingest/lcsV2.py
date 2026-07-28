@@ -177,6 +177,8 @@ class IngestClient:
             "averagingPeriod": {"col":"data_averaging_period_seconds", "func": to_seconds},
             "measure": {"col": "value"},
             "value": {},
+            "units": {},
+            "unit": {"col": "units"},
             "lat": {},
             "lon": {},
             "key":{"col": "ingest_id"},
@@ -367,12 +369,13 @@ class IngestClient:
                 table=db_table
             ))
 
+            logger.debug(self.measurements)
             iterator = StringIteratorIO(
                 ("\t".join(map(clean_csv_value, line)) + "\n" for line in self.measurements)
             )
             cursor.copy_expert(
                 """
-                COPY staging_measurements (ingest_id, source_name, source_id, measurand, value, datetime, lon, lat, fetchlogs_id)
+                COPY staging_measurements (ingest_id, source_name, source_id, measurand, units, value, datetime, lon, lat, fetchlogs_id)
                 FROM stdin;
                 """,
                 iterator,
@@ -470,6 +473,7 @@ class IngestClient:
                                 "key":  ingest_id,
                                 "sensors": [{
                                     "key": sensor_ingest_id,
+                                    "units": nd.get("unit"),
                                     "interval_seconds": to_seconds('averagingPeriod', nd)
                                 }]
                             }]
@@ -478,7 +482,10 @@ class IngestClient:
                     ## but its possible that we may have already added the node but
                     ## not this specific parameter/sensor
                     if sensor_ingest_id not in self.sensors:
-                        self.add_sensors([{"key": sensor_ingest_id}], ingest_id, fetchlogs_id)
+                        self.add_sensors([{
+                            "key": sensor_ingest_id,
+                            "units": nd.get("unit"),
+                        }], ingest_id, fetchlogs_id)
                     ## all measurements should be added
                     self.add_measurement(nd)
 
@@ -500,7 +507,6 @@ class IngestClient:
 
 
     def load_metadata(self, meta):
-        logger.debug(meta)
         if "source" in meta.keys():
             self.source = meta.get('source')
         if "sourceName" in meta.keys():
@@ -782,6 +788,7 @@ class IngestClient:
         meas = {}
         lat = None
         lon = None
+        units = None
         # csv method
         if isinstance(m, list):
             if len(m) < 3:
@@ -808,6 +815,12 @@ class IngestClient:
             ingest_id = meas.get('ingest_id')
             datetime = meas.get('datetime')
             value = meas.get('value')
+            units = meas.get('units')
+            if units is None:
+                ## if the data is new and the sensor exists
+                ## not sure its worth doing this, lets revisit after the etl updates
+                units = self.sensors.get(ingest_id, {}).get('units')
+
             lon = meas.get('lon', None)
             lat = meas.get('lat', None)
             fetchlogs_id = m.get('fetchlogs_id', self.fetchlogs_id)
@@ -839,7 +852,7 @@ class IngestClient:
                     "averaging_interval_secs": node.get("averaging_interval_secs"),
                     "logging_interval_secs": node.get("logging_interval_secs")
                 }], node_ingest_id, fetchlogs_id)
-            self.measurements.append([ingest_id, source_name, source_id, measurand, value, datetime, lon, lat, fetchlogs_id])
+            self.measurements.append([ingest_id, source_name, source_id, measurand, units, value, datetime, lon, lat, fetchlogs_id])
         else:
             logger.warning(f"Something was not set {[ingest_id, datetime, source_name, source_id, measurand]} - {ingest_arr} - {m}")
 

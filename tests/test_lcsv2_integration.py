@@ -5,43 +5,7 @@ from unittest.mock import patch
 from ingest.lcsV2 import IngestClient
 from ingest import settings
 
-
-def debug_query_data(sql, params, cursor):
-    """Helper function to explore data when debugging"""
-    cursor.execute(sql, params)
-    rows = cursor.fetchall()
-    if len(rows) == 0:
-        print(f'No rows returned for debug query\n{sql}')
-    for r in rows:
-        print(r)
-
-    return rows
-
-
-def get_test_path(relpath):
-    """Helper to get absolute path to test data files."""
-    dirname = os.path.dirname(__file__)
-    return os.path.join(dirname, relpath)
-
-
-@pytest.fixture
-def disable_temp_tables():
-    """Disable USE_TEMP_TABLES for testing so we can verify staging tables."""
-    with patch.object(settings.settings, 'USE_TEMP_TABLES', False):
-        yield
-
-
-@pytest.fixture
-def sample_fetchlog(db_cursor, clean_fetchlogs):
-    """Create a sample fetchlog record for testing."""
-    test_time = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-    db_cursor.execute("""
-        INSERT INTO fetchlogs (key, last_modified, init_datetime, completed_datetime, has_error)
-        VALUES ('test-data.json', %s, %s, NULL, false)
-        RETURNING fetchlogs_id
-    """, (test_time, test_time))
-    fetchlog_id = db_cursor.fetchone()[0]
-    return fetchlog_id
+from conftest import get_test_path
 
 
 @pytest.mark.integration
@@ -226,9 +190,6 @@ class TestIngestClientIntegration:
         client.dump(load=True)
         #client.dump_locations(load=True)
         #client.dump_measurements(load=True)
-
-        debug_query_data('SELECT COUNT(1) FROM staging_sensors', (), cursor)
-
 
         cursor.execute("SELECT COUNT(*) FROM staging_measurements WHERE fetchlogs_id = %s",
                       (sample_fetchlog,))
