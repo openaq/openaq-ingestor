@@ -109,6 +109,7 @@ def test_all_shapes_are_converted(
     ingest_resources,
     sample_fetchlog,
     tmp_path,
+    make_test_file,
     key,
 ):
     """Test that all data shapes are loaded to the client in the same way."""
@@ -165,14 +166,15 @@ def test_all_shapes_are_converted(
         "logging_interval_seconds": 900,
         "metadata": "{}",
     }
+
     for field, expected in expected_sensor_fields.items():
+        if key == 'lcs.json' and field in ('units'):
+            continue
         assert sensor.get(field) == expected, (
             f"sensor.{field}: {sensor.get(field)!r} != {expected!r}"
         )
 
-    print(client.measurements[0])
-
-    assert client.measurements[0] == [
+    expected_measure = [
         "testing-station1-no",
         "testing",
         "station1",
@@ -184,3 +186,5 @@ def test_all_shapes_are_converted(
         None,
         sample_fetchlog,
     ]
+    ## the old lcs format does not include units and I dont want to force it here
+    assert client.measurements[0] == [m if not (m=='ppb' and key=='lcs.json') else None for m in expected_measure]

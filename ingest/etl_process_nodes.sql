@@ -250,6 +250,7 @@ FROM r;
  -- We do not want to create default sensors because we are not dealling with measurements here
 UPDATE staging_sensors
 SET sensor_systems_id = staging_sensorsystems.sensor_systems_id
+  , is_new = FALSE
 FROM staging_sensorsystems
 WHERE staging_sensors.ingest_sensor_systems_id = staging_sensorsystems.ingest_id;
 
@@ -321,12 +322,22 @@ GROUP BY ingest_id
 , ss.sensor_statuses_id
 , metadata
 ON CONFLICT (sensor_systems_id, measurands_id, source_id) DO UPDATE
-SET metadata = COALESCE(sensors.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}')
-  , data_logging_period_seconds = EXCLUDED.data_logging_period_seconds
-  , data_averaging_period_seconds = EXCLUDED.data_averaging_period_seconds
-  , sensor_statuses_id = EXCLUDED.sensor_statuses_id
+ SET metadata = COALESCE(sensors.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}')
+  -- in a situation where we have limited data updating an existing record
+  -- we need to be careful we dont overwrite anything
+  , data_logging_period_seconds = COALESCE(EXCLUDED.data_logging_period_seconds, sensors.data_logging_period_seconds)
+  , data_averaging_period_seconds = COALESCE(EXCLUDED.data_averaging_period_seconds, sensors.data_averaging_period_seconds)
+  , sensor_statuses_id = COALESCE(EXCLUDED.sensor_statuses_id, sensors.sensor_statuses_id)
   , modified_on = now()
-RETURNING 1)
+ WHERE COALESCE(EXCLUDED.data_logging_period_seconds, sensors.data_logging_period_seconds)
+         IS DISTINCT FROM sensors.data_logging_period_seconds
+    OR COALESCE(EXCLUDED.data_averaging_period_seconds, sensors.data_averaging_period_seconds)
+         IS DISTINCT FROM sensors.data_averaging_period_seconds
+    OR COALESCE(EXCLUDED.sensor_statuses_id, sensors.sensor_statuses_id)
+         IS DISTINCT FROM sensors.sensor_statuses_id
+    --OR (COALESCE(sensors.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}'))
+    --     IS DISTINCT FROM sensors.metadata
+    RETURNING 1)
 SELECT COUNT(1) INTO __inserted_sensors
 FROM inserts;
 
@@ -348,7 +359,6 @@ WHERE sensors_id IS NULL
 RETURNING 1)
 SELECT COUNT(1) INTO __rejected_sensors
 FROM r;
-
 
 -- update the period so that we dont have to keep doing it later
 -- we could do this on import as well if we feel this is slowing us down

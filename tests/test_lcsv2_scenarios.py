@@ -6,6 +6,7 @@ from ingest.lcsV2 import IngestClient
 from ingest import settings
 
 
+#from tests._debug import dump
 
 
 @pytest.fixture
@@ -108,6 +109,8 @@ class TestIngestDataScenarios:
         self,
         ingest_resources,
         disable_temp_tables,
+        get_object,
+        create_node,
     ):
         client = IngestClient(resources=ingest_resources);
 
@@ -131,91 +134,47 @@ class TestIngestDataScenarios:
         assert len(client.nodes) == 1, "Client has the right number of locations"
         assert len(client.measurements) == 8, "Client has the right number of measurements"
 
-        with ingest_resources.cursor() as cursor:
+        existing_node = create_node({
+            "site_name": "test_site",
+            "source_name": "testing",
+            "source_id": "site1",
+            "sensors": [
+                {
+                    "source_id": "testing-site1-pm10",
+                    "measurand": "pm10",
+                    "period": 3600,
+                    "flags": [{
+                        "flag_types_id": 4,
+                        "period": ("2024-12-31 23:00:00", "2025-01-01 00:00:00"),
+                        "note": "test flag to join",
+                    }],
+                },
+                {
+                    "source_id": "testing-site1-pm25",
+                    "measurand": "pm25",
+                    "period": 3600,
+                    "flags": [{
+                        "flag_types_id": 4,
+                        "period": ("2024-12-31 23:00:00", "2025-01-01 00:00:00"),
+                        "note": "test flag to join",
+                    }],
+                },
+            ],
+        })
 
-            ## first we add some existing data to test that flags get appended
-            cursor.execute("""
-                WITH inserted_node AS (
-                  INSERT INTO sensor_nodes (site_name, source_name, source_id)
-                  VALUES ('test_site', 'testing', 'site1')
-                  ON CONFLICT (source_name, source_id) DO UPDATE
-                  SET site_name = EXCLUDED.site_name
-                  RETURNING source_id, sensor_nodes_id
-                ), inserted_system AS (
-                  INSERT INTO sensor_systems (sensor_nodes_id, source_id)
-                  SELECT sensor_nodes_id, source_id
-                  FROM inserted_node
-                  ON CONFLICT (sensor_nodes_id, source_id) DO UPDATE
-                  SET source_id = EXCLUDED.source_id
-                  RETURNING sensor_systems_id
-                ), inserted_sensor AS (
-                  INSERT INTO sensors (sensor_systems_id, measurands_id, source_id, data_averaging_period_seconds)
-                  SELECT sensor_systems_id
-                  , v.measurands_id
-                  , v.source_id
-                  , v.data_averaging_period_seconds
-                  FROM inserted_system, (VALUES
-                       (1, 'testing-site1-pm10', 3600),
-                       (2, 'testing-site1-pm25', 3600)
-                  ) as v(measurands_id, source_id, data_averaging_period_seconds)
-                  ON CONFLICT (source_id, measurands_id, sensor_systems_id) DO UPDATE
-                  SET measurands_id = EXCLUDED.measurands_id
-                  RETURNING sensors_id, source_id
-                ) INSERT INTO flags (sensor_nodes_id, sensors_ids, flag_types_id, period, note)
-                  SELECT sensor_nodes_id
-                  , ARRAY[sensors_id]
-                  , 4
-                  , tstzrange('2024-12-31 23:00:00', '2025-01-01 00:00:00', '[]')
-                  , 'test flag to join'
-                  FROM inserted_sensor, inserted_node
-                  WHERE inserted_sensor.source_id = 'testing-site1-pm25'
-                  RETURNING flags_id;
-                """)
-            existing = cursor.fetchone()
+        ## now we dump or our data for ingest
+        client.dump()
 
-            ## now we dump or our data for ingest
-            client.dump()
+        meas = get_object('staged_measurements')
+        assert len(meas) == 8, f"Staging does not contain all the measurements, has {len(meas)}"
 
-            # Verify node data integrity
-            cursor.execute("""
-            SELECT measurands_id, measurand, sensors_id
-            FROM staging_measurements
-            WHERE value IS NOT NULL
-            """)
-            meas = cursor.fetchall()
-            assert len(meas) == 2, "Staging contains all the measurements"
+        flags = get_object("staged_flags")
 
-            cursor.execute("""
-            SELECT datetime_from
-            , sensors_id
-            , flags_id
-            FROM staging_flags
-            WHERE flags_id IS NOT NULL
-            """)
-            oflags = cursor.fetchall()
-            assert len(oflags) == 1, "Database has the right number of old flags staged"
+        oflags = [x for x in flags if x['flags_id'] is not None]
+        assert len(oflags) == 2, f"Database does not have the right number of old flags staged, has {len(oflags)}"
 
-            cursor.execute("""
-            SELECT datetime_from
-            , sensors_id
-            FROM staging_flags
-            WHERE flags_id IS NULL
-            """)
-            nflags = cursor.fetchall()
-            assert len(nflags) == 3, "Database has the right number of new flags staged"
+        nflags = [x for x in flags if x['flags_id'] is None]
+        assert len(nflags) == 2, f"Database does not have the right number of new flags staged, has {len(nflags)}"
 
-            cursor.execute("""
-            SELECT datetime
-            FROM measurements
-            WHERE value IS NOT NULL
-            """)
-            rows = cursor.fetchall()
-            assert len(rows) == 2, "Database has the right number of good measurements"
-
-            cursor.execute("""
-            SELECT datetime
-            FROM measurements
-            WHERE value IS NULL
-            """)
-            rows = cursor.fetchall()
-            assert len(rows) == 6, "Database has the right number of null measurements"
+        null_values = [x for x in meas if x['value'] is None]
+        assert len(null_values) == 6, "Database has the right number of null measurements"

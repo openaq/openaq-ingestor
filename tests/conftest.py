@@ -1,6 +1,7 @@
 import pytest
 import psycopg2
 import boto3
+import logging
 from moto import mock_aws
 from pathlib import Path
 import os
@@ -11,6 +12,10 @@ import json
 from psycopg2.extras import RealDictCursor
 from ingest.settings import settings
 from ingest.resources import Resources
+
+logging.getLogger('boto3').setLevel(logging.WARNING)
+logging.getLogger('botocore').setLevel(logging.WARNING)
+logging.getLogger('urllib3').setLevel(logging.WARNING)
 
 
 def pytest_addoption(parser):
@@ -283,12 +288,12 @@ def _get_measurand_id(cursor, measurand: str, units: str = None):
     """Look up measurands_id by name (and optionally units)."""
     if units:
         cursor.execute(
-            "SELECT measurands_id, units FROM measurands WHERE measurand = %s AND units = %s LIMIT 1",
+            "SELECT measurands_id, units FROM measurands WHERE measurand = %s AND units = %s AND is_active LIMIT 1",
             (measurand, units),
         )
     else:
         cursor.execute(
-            "SELECT measurands_id, units FROM measurands WHERE measurand = %s LIMIT 1",
+            "SELECT measurands_id, units FROM measurands WHERE measurand = %s AND is_active LIMIT 1",
             (measurand,),
         )
     row = cursor.fetchone()
@@ -296,6 +301,38 @@ def _get_measurand_id(cursor, measurand: str, units: str = None):
         raise ValueError(f"Measurand '{measurand}' (units={units}) not found in measurands table")
     return row[0], row[1]
 
+def _insert_flag(cursor, sensor_nodes_id: int, sensors_ids, flag_spec: dict) -> int:
+    """
+    Insert a flag row.
+
+    flag_spec keys:
+      - flag_types_id (required)
+      - period: (start, end) tuple/list of timestamptz strings, or a tstzrange literal
+      - note (optional)
+      - bounds (optional, default '[]')  e.g. '[)', '[]'
+    """
+    flag_types_id = flag_spec["flag_types_id"]
+    note = flag_spec.get("note")
+    bounds = flag_spec.get("bounds", "[]")
+    period = flag_spec["period"]
+
+    if isinstance(period, (list, tuple)) and len(period) == 2:
+        period_sql = "tstzrange(%s, %s, %s)"
+        period_params = (period[0], period[1], bounds)
+    else:
+        # assume caller passed a range literal or a psycopg2 Range
+        period_sql = "%s"
+        period_params = (period,)
+
+    cursor.execute(
+        f"""
+        INSERT INTO flags (sensor_nodes_id, sensors_ids, flag_types_id, period, note)
+        VALUES (%s, %s, %s, {period_sql}, %s)
+        RETURNING flags_id
+        """,
+        (sensor_nodes_id, sensors_ids, flag_types_id, *period_params, note),
+    )
+    return cursor.fetchone()[0]
 
 def _create_node(cursor, node_spec: dict) -> dict:
     source_name = node_spec.get("source_name", "testing")
@@ -347,7 +384,7 @@ def _create_node(cursor, node_spec: dict) -> dict:
 
     created_systems = []
     for i, sys_spec in enumerate(systems):
-        sys_source_id = sys_spec.get("source_id", f"{source_id}-sys{i+1}" if len(systems) > 1 else source_id)
+        sys_source_id = sys_spec.get("source_id", f"{source_id}-sys{i+1}" if len(systems) > 1 else f"{source_name}-{source_id}")
 
         cursor.execute(
             """
@@ -360,6 +397,7 @@ def _create_node(cursor, node_spec: dict) -> dict:
             (sensor_nodes_id, sys_source_id),
         )
         sensor_systems_id = cursor.fetchone()[0]
+
 
         created_sensors = []
         for sensor_spec in sys_spec.get("sensors", []):
@@ -388,12 +426,18 @@ def _create_node(cursor, node_spec: dict) -> dict:
             )
             sensors_id = cursor.fetchone()[0]
 
+            sensor_flag_ids = []
+            for flag_spec in sensor_spec.get("flags", []):
+                fid = _insert_flag(cursor, sensor_nodes_id, [sensors_id], flag_spec)
+                sensor_flag_ids.append(fid)
+
             created_sensors.append({
                 "sensors_id": sensors_id,
                 "source_id": sensor_source_id,
                 "measurand": measurand,
                 "units": resolved_units,
                 "measurands_id": measurands_id,
+                "flags": sensor_flag_ids,
             })
 
         created_systems.append({
@@ -402,12 +446,18 @@ def _create_node(cursor, node_spec: dict) -> dict:
             "sensors": created_sensors,
         })
 
+    node_flag_ids = []
+    for flag_spec in node_spec.get("flags", []):
+        fid = _insert_flag(cursor, sensor_nodes_id, None, flag_spec)
+        node_flag_ids.append(fid)
+
     return {
         "sensor_nodes_id": sensor_nodes_id,
         "source_name": source_name,
         "source_id": source_id,
         "site_name": site_name,
         "systems": created_systems,
+        "flags": node_flag_ids,
     }
 
 
@@ -441,7 +491,7 @@ def get_test_path(relpath: str) -> str:
 @pytest.fixture
 def disable_temp_tables():
     """Force staging tables (not TEMP) so tests can inspect them."""
-    with patch.object(settings.settings, "USE_TEMP_TABLES", False):
+    with patch.object(settings, "USE_TEMP_TABLES", False):
         yield
 
 
@@ -491,9 +541,25 @@ _QUERIES = {
         ORDER BY ingest_id
     """,
     "staged_sensors": """
-        SELECT ingest_id, sensors_id, is_new, measurand, units, status
+        SELECT *
         FROM staging_sensors
         ORDER BY ingest_id
+    """,
+    "staged_flags": """
+        SELECT *
+        FROM staging_flags
+    """,
+    "flags": """
+        SELECT flags_id
+        , flag_types_id
+        , to_char(lower(period), 'YYYY-MM-DD HH24:MI:SS')|| ' to ' ||
+          to_char(upper(period), 'YYYY-MM-DD HH24:MI:SS') AS formatted_range
+        , sensor_nodes_id
+        , sensors_ids
+        , added_on
+        , modified_on
+        , note
+        FROM flags
     """,
     "staged_measurements": """
         SELECT m.*
@@ -504,11 +570,25 @@ _QUERIES = {
     """,
     "sensors": """
         SELECT s.sensors_id,
+               s.measurands_id,
+               s.sensor_systems_id,
                s.data_averaging_period_seconds,
                s.data_logging_period_seconds,
                m.measurand, m.units, s.source_id
+               , s.metadata
+               , s.added_on, s.modified_on
         FROM sensors s
         JOIN measurands m USING (measurands_id)
+        ORDER BY s.added_on
+    """,
+    "nodes": """
+        SELECT *
+        FROM sensor_nodes s
+        ORDER BY s.source_id
+    """,
+    "systems": """
+        SELECT *
+        FROM sensor_systems s
         ORDER BY s.source_id
     """,
 }

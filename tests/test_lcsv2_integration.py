@@ -3,10 +3,25 @@ import os
 from datetime import date, datetime, timezone
 from unittest.mock import patch
 from ingest.lcsV2 import IngestClient
-from ingest import settings
 
-from conftest import get_test_path
+from tests.conftest import get_test_path
 
+dataV2 = """
+{
+    "meta": {
+        "schema": "v2"
+    },
+    "measures": [
+        {"sensor_id":"testing-site1-pm10", "timestamp": "2024-01-01 00:00:00", "value": 2 },
+        {"ingest_id":"testing-site1-pm10", "timestamp": "2024-01-01 01:00:00", "value": 2 }
+    ],
+    "locations": [
+        {"location":"testing-site1", "label": "Site #1", "lon": "-123.04", "lat": "42.05"},
+        {"ingest_id":"testing-site2", "label": "Site #2", "lon": "-123.05", "lat": "42.06"},
+        {"sensor_node_id":"testing-site3", "label": "Site #3", "lon": "-123.06", "lat": "42.07"}
+    ]
+}
+"""
 
 @pytest.mark.integration
 class TestIngestClientIntegration:
@@ -28,12 +43,14 @@ class TestIngestClientIntegration:
     def test_ingest_simple_data_to_staging(
         self,
         ingest_resources,
-        sample_fetchlog
+        sample_fetchlog,
+        make_test_file,
+        get_object,
     ):
         """Test that simple data is correctly inserted into staging tables."""
         # Arrange
         client = IngestClient(resources=ingest_resources)
-        test_file = get_test_path('dataV2.json')
+        test_file = make_test_file("dataV2.json", dataV2)
         # Act
         client.load_key(test_file, sample_fetchlog, str(date.today()))
         client.dump(load=True)
@@ -59,53 +76,53 @@ class TestIngestClientIntegration:
             assert node[2] is not None, "source_id should not be NULL"
 
         # Assert - Check staging_measurements
-        cursor.execute("SELECT COUNT(*) FROM staging_measurements")
-        measurement_count = cursor.fetchone()[0]
+        print(test_file)
+        rejects = get_object("rejects", fetchlogs_id = sample_fetchlog)
+        print(rejects)
+        staged_measurements = get_object("staged_measurements")
+        measurement_count = len(staged_measurements)
         assert measurement_count == 2, f"Expected 2 measurements, got {measurement_count}"
         cursor.close()
 
     def test_ingest_realtime_measures_to_staging(
         self,
         ingest_resources,
-        sample_fetchlog
+        sample_fetchlog,
+        make_test_file,
+        get_object,
     ):
         """Test realtime measures data insertion."""
         # Arrange
         client = IngestClient(resources=ingest_resources)
-        test_file = get_test_path('testdata_realtime_measures.ndjson')
+        content = """{"date": {  "utc": "2024-04-08T21:25:00.000Z",  "local": "2024-04-09T00:25:00+03:00"},"parameter": "no","value": 0.0002, "unit": "xxx","averagingPeriod": {  "unit": "hours",  "value": 0.25},"location": "station1","city": "portland, OR","country": "US","coordinates": {  "latitude": 42.8011974,  "longitude": -122.99144547},"attribution": [  { "name": "Fake portland location", "url": "https://fake-portland.gov"  }],"sourceName": "testing","sourceType": "government","mobile": false }\n{"date": {  "utc": "2024-04-08T21:25:00.000Z",  "local": "2024-04-09T00:25:00+03:00"},"parameter": "pm10","value": 0.0002, "unit": "ug/m3","averagingPeriod": {  "unit": "hours",  "value": 0.25},"location": "station1","city": "portland, OR","country": "US","coordinates": {  "latitude": 42.8011974,  "longitude": -122.99144547},"attribution": [  { "name": "Fake portland location", "url": "https://fake-portland.gov"  }],"sourceName": "testing","sourceType": "government","mobile": false }"""
+        test_file = make_test_file('testdata_realtime_measures.ndjson', content)
 
         # Act
         client.load_key(test_file, sample_fetchlog, str(date.today()))
         client.dump(load=True)
 
-        # Assert - Realtime data should only have measurements, no nodes
-        cursor = ingest_resources.cursor()
+        rejects = get_object("rejects", fetchlogs_id=sample_fetchlog)
 
-        cursor.execute("SELECT COUNT(*) FROM staging_sensornodes WHERE fetchlogs_id = %s",
-                      (sample_fetchlog,))
-        node_count = cursor.fetchone()[0]
+        # Assert - Realtime data should only have measurements, no nodes
+        nodes = get_object("staged_sensor_nodes")
+        node_count = len(nodes)
         assert node_count == 1, f"Realtime data creates 1 node, got {node_count}"
 
+        sensors = get_object("staged_sensors")
+        sensors_count = len(sensors)
+        assert sensors_count == 2, f"Realtime data creates 2 sensors, got {sensors_count}"
+
         # one of the measurements should not load due to bad units
-        cursor.execute("SELECT COUNT(*) FROM rejects WHERE fetchlogs_id = %s",
-                      (sample_fetchlog,))
-        reject_count = cursor.fetchone()[0]
-        assert reject_count == 1, f"Expected 1 reject, got {reject_count}"
+        assert len(rejects) == 1, f"Expected 1 reject, got {len(rejects)}"
+        assert 'meas-no-unit-conversion' in [r['tbl'] for r in rejects]
 
         # Verify measurement data
-        cursor.execute("""
-            SELECT ingest_id, datetime, value, fetchlogs_id
-            FROM staging_measurements
-            WHERE fetchlogs_id = %s
-            ORDER BY datetime
-        """, (sample_fetchlog,))
-        measurements = cursor.fetchall()
-
-        assert len(measurements) == 2
+        measurements = get_object("staged_measurements")
+        assert len(measurements) == 1, f"Realtime data creates 1 measure, got {len(measurements)}"
         for meas in measurements:
-            assert meas[3] == sample_fetchlog, "Measurement has wrong fetchlogs_id"
-            assert meas[2] is not None, "Measurement value should not be NULL"
-        cursor.close()
+            assert meas['fetchlogs_id'] == sample_fetchlog, "Measurement has wrong fetchlogs_id"
+            assert meas['value'] is not None, "Measurement value should not be NULL"
+
 
     def test_ingest_clarity_data_to_staging(
         self,

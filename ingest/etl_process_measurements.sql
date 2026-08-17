@@ -82,8 +82,12 @@ WITH staged_sensors AS (
   , measurands_id=s.measurands_id
   , sensor_averaging_interval=make_interval(secs => s.data_averaging_period_seconds + 1)
   , datetime_from=datetime - make_interval(secs => s.data_averaging_period_seconds)
-  , units_id = get_units_id(staging_measurements.units)
+  , units_id = CASE WHEN staging_measurements.units IS NOT NULL
+               THEN get_units_id(staging_measurements.units)
+               ELSE m.units_id END -- use defaul units
+  , note = 'initial-sensor-id-match'
 	FROM active_sensors s
+  JOIN measurands m USING (measurands_id)
 	WHERE s.source_id=ingest_id;
 
 
@@ -155,8 +159,12 @@ SET sensors_id = s.sensors_id
   , measurands_id = s.measurands_id
   , sensor_averaging_interval = make_interval(secs => s.data_averaging_period_seconds + 1)
   , datetime_from = datetime - make_interval(secs => s.data_averaging_period_seconds)
-  , units_id = get_units_id(staging_measurements.units)
+  , units_id = CASE WHEN staging_measurements.units IS NOT NULL
+               THEN get_units_id(staging_measurements.units)
+               ELSE m.units_id END -- use defaul units
+  , note = 'second-sensor-id-match'
 FROM sensors s
+JOIN measurands m USING (measurands_id)
 WHERE s.source_id = ingest_id
 AND staging_measurements.sensors_id IS NULL;
 

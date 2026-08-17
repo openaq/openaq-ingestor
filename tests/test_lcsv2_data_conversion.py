@@ -3,11 +3,9 @@ import os
 from datetime import date, datetime, timezone
 from unittest.mock import patch
 from ingest.lcsV2 import IngestClient
-from ingest import settings
 from psycopg2.extras import RealDictCursor
 
-from tests.conftest import get_test_path
-
+from tests._debug import dump
 
 
 @pytest.mark.integration
@@ -32,7 +30,7 @@ class TestIngestClientIntegration:
         """Test that realtime data shape is added with the right measurand and converted."""
         # Arrange
         client = IngestClient(resources=ingest_resources)
-        content = """{"date": {  "utc": "2024-04-08T21:25:00.000Z",  "local": "2024-04-09T00:25:00+03:00"},"parameter": "no","value": 0.002,"unit": "ppm","averagingPeriod": {  "unit": "hours",  "value": 0.25},"location": "station1","city": "portland, OR","country": "US","coordinates": {  "latitude": 42.8011974,  "longitude": -122.99144547},"attribution": [  { "name": "Station #1", "url": "https://fake-stations.gov"  }],"sourceName": "testing","sourceType": "government","mobile": false }"""
+        content = """{"date": {  "utc": "2024-04-08T21:25:00.000Z",  "local": "2024-04-09T00:25:00+03:00"},"parameter": "no","value": 0.002, "unit": "ppm","averagingPeriod": {  "unit": "hours",  "value": 0.25},"location": "station1","city": "portland, OR","country": "US","coordinates": {  "latitude": 42.8011974,  "longitude": -122.99144547},"attribution": [  { "name": "Station #1", "url": "https://fake-stations.gov"  }],"sourceName": "testing","sourceType": "government","mobile": false }"""
         test_file = make_test_file("realtime_bad_param.ndjson", content)
         client.load_key(test_file, sample_fetchlog, str(date.today()))
 
@@ -43,13 +41,6 @@ class TestIngestClientIntegration:
         assert client.measurements[0][5] == 0.002 ## not converted yet
 
         client.dump(load=True)
-        #client.dump_locations(load=True)
-        #client.dump_measurements(load=True)
-
-
-        # Assert - Check staging_sensornodes
-        cursor = ingest_resources.cursor(cursor_factory=RealDictCursor)
-
 
         # Verify node data integrity
         rejects = get_object("rejects", fetchlogs_id=sample_fetchlog)
@@ -58,12 +49,8 @@ class TestIngestClientIntegration:
         staged_sensors = get_object("staged_sensors")
         staged_measurements = get_object("staged_measurements")
 
-
-        print(staged_measurements)
         assert len(staged_nodes) == 1
         assert len(staged_systems) == 1
-        #assert len(sensors) == 1
-
 
         node = staged_nodes[0]
         assert node.get('is_new') == True
@@ -78,7 +65,6 @@ class TestIngestClientIntegration:
 
         ## updated value
         assert meas.get('value') == 2
-        cursor.close()
 
 
     def test_ingest_realtime_is_converted_when_sensor_exists(
@@ -91,9 +77,9 @@ class TestIngestClientIntegration:
     ):
 
         node = create_node({
-            "site_name": "station1",
+            "site_name": "Station #1",
             "source_name": "testing",
-            "source_id": "testing-station1",
+            "source_id": "station1",
             "coordinates": {"lat": 42.8011974, "lon": -122.99144547},
             "sensors": [{"period": 900, "measurand": "no"}],
         })
@@ -120,6 +106,7 @@ class TestIngestClientIntegration:
         assert len(client.sensors) == 1, "Sensor was not added"
         assert client.measurements[0][5] == 0.002 ## not converted yet
 
+        dump(get_object("systems"))
         client.dump(load=True)
 
         # Verify node data integrity
@@ -129,11 +116,9 @@ class TestIngestClientIntegration:
         staged_sensors = get_object("staged_sensors")
         staged_measurements = get_object("staged_measurements")
 
-
         assert len(staged_nodes) == 1
         assert len(staged_systems) == 1
         #assert len(sensors) == 1
-
 
         node = staged_nodes[0]
         assert node.get('is_new') == False, 'Node appears to be new'
@@ -142,7 +127,8 @@ class TestIngestClientIntegration:
         assert node.get('site_name') == 'Station #1', 'site_name is not being carried over'
 
         system = staged_systems[0]
-        assert system.get('is_new') == False, 'System appears to be new'
+        dump(staged_systems)
+        assert system.get('is_new') == False, 'A new system was created instead of reusing an old one'
 
         meas = staged_measurements[0]
 
@@ -229,3 +215,59 @@ class TestIngestClientIntegration:
         assert len(rejects) == 3 ## sensor and measurand rejected and then the measurement
         assert rejects[2].get('tbl') == 'meas-unsupported-measurand'
         assert len(staged_measurements) == 0
+
+    def test_ingest_user_default_unit_for_measurand_when_none_provided(
+        self,
+        create_node,
+        ingest_resources,
+        sample_fetchlog,
+        make_test_file,
+        get_object,
+    ):
+        client = IngestClient(resources=ingest_resources)
+
+        content = """{"date": {  "utc": "2024-04-08T21:25:00.000Z",  "local": "2024-04-09T00:25:00+03:00"},"parameter": "no","value": 2, "averagingPeriod": {  "unit": "hours",  "value": 0.25},"location": "station1","city": "portland, OR","country": "US","coordinates": {  "latitude": 42.8011974,  "longitude": -122.99144547},"attribution": [  { "name": "Station #1", "url": "https://fake-stations.gov"  }],"sourceName": "testing","sourceType": "government","mobile": false }"""
+
+        test_file = make_test_file("realtime_default_units.ndjson", content)
+        client.load_key(test_file, sample_fetchlog, str(date.today()))
+        client.dump(load=True)
+
+        #rejects = get_object("rejects", fetchlogs_id=sample_fetchlog)
+        staged_measurements = get_object("staged_measurements")
+
+        assert len(staged_measurements) == 1
+
+
+
+    def test_ingest_user_default_unit_for_measurand_when_none_provided_and_sensor_exists(
+        self,
+        create_node,
+        ingest_resources,
+        sample_fetchlog,
+        make_test_file,
+        get_object,
+    ):
+
+        node = create_node({
+            "site_name": "Station #1",
+            "source_name": "testing",
+            "source_id": "station1",
+            "coordinates": {"lat": 42.8011974, "lon": -122.99144547},
+            "sensors": [{"period": 900, "measurand": "no"}],
+        })
+
+        client = IngestClient(resources=ingest_resources)
+
+        content = """{"date": {  "utc": "2024-04-08T21:25:00.000Z",  "local": "2024-04-09T00:25:00+03:00"},"parameter": "no","value": 2, "averagingPeriod": {  "unit": "hours",  "value": 0.25},"location": "station1","city": "portland, OR","country": "US","coordinates": {  "latitude": 42.8011974,  "longitude": -122.99144547},"attribution": [  { "name": "Station #1", "url": "https://fake-stations.gov"  }],"sourceName": "testing","sourceType": "government","mobile": false }"""
+
+        test_file = make_test_file("realtime_default_units.ndjson", content)
+        client.load_key(test_file, sample_fetchlog, str(date.today()))
+        client.dump(load=True)
+
+        #rejects = get_object("rejects", fetchlogs_id=sample_fetchlog)
+        staged_measurements = get_object("staged_measurements")
+        staged_sensors = get_object("staged_sensors")
+        sensors_id = node['systems'][0]['sensors'][0]['sensors_id']
+
+        assert len(staged_measurements) == 1
+        assert staged_measurements[0]['value'] == 2

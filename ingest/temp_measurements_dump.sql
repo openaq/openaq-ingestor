@@ -54,7 +54,8 @@ CREATE {table} IF NOT EXISTS staging_measurements (
     datetime timestamptz,
     lon float,
     lat float,
-    fetchlogs_id int
+    fetchlogs_id int,
+    note text
 );
 
 --This table will hold measurements that have
