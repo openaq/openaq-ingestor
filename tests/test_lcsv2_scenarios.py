@@ -5,9 +5,7 @@ from unittest.mock import patch
 from ingest.lcsV2 import IngestClient
 from ingest import settings
 
-
 #from tests._debug import dump
-
 
 @pytest.fixture
 def disable_temp_tables():

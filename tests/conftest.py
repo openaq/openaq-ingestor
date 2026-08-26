@@ -87,6 +87,17 @@ def clean_fetchlogs(db_cursor):
     yield
     # Cleanup happens via db_connection rollback
 
+@pytest.fixture
+def make_fetchlog(db_cursor, clean_fetchlogs):
+    """Factory for creating fetchlog rows. Returns a function."""
+    def _make(key):
+        db_cursor.execute("""
+            INSERT INTO fetchlogs (key, last_modified, init_datetime)
+            VALUES (%s, now(), now())
+            RETURNING fetchlogs_id
+        """, (key,))
+        return db_cursor.fetchone()[0]
+    return _make
 
 @pytest.fixture(scope="function")
 def mock_s3():
@@ -531,7 +542,7 @@ _QUERIES = {
     """,
     "staged_sensor_nodes": """
         SELECT ingest_id, source_id, source_name, site_name,
-               sensor_nodes_id, is_new, is_moved
+               sensor_nodes_id, is_new, is_moved, matching_method
         FROM staging_sensornodes
         ORDER BY ingest_id
     """,
@@ -589,6 +600,41 @@ _QUERIES = {
     "systems": """
         SELECT *
         FROM sensor_systems s
+        ORDER BY s.source_id
+    """,
+    "measurement_counts": """
+        SELECT s.source_id, COUNT(*) AS n
+        FROM measurements m
+        JOIN sensors s USING (sensors_id)
+        JOIN sensor_systems sy USING (sensor_systems_id)
+        JOIN sensor_nodes n USING (sensor_nodes_id)
+        WHERE n.source_name = %(source_name)s
+        GROUP BY s.source_id
+    """,
+    "nodes_by_source": """
+        SELECT sensor_nodes_id, source_name, source_id, site_name,
+               ismobile, ST_AsText(geom) AS geom_wkt, added_on, modified_on
+        FROM sensor_nodes
+        WHERE source_name = %(source_name)s
+        ORDER BY source_id
+    """,
+    "systems_by_source": """
+        SELECT sy.sensor_systems_id, sy.sensor_nodes_id, sy.source_id,
+               sy.instruments_id, sy.modified_on, sy.added_on
+        FROM sensor_systems sy
+        JOIN sensor_nodes n USING (sensor_nodes_id)
+        WHERE n.source_name = %(source_name)s
+        ORDER BY sy.source_id
+    """,
+    "sensors_by_source": """
+        SELECT s.sensors_id, s.sensor_systems_id, s.source_id,
+               s.measurands_id, s.data_averaging_period_seconds,
+               s.data_logging_period_seconds, s.sensor_statuses_id,
+               s.modified_on, s.added_on
+        FROM sensors s
+        JOIN sensor_systems sy USING (sensor_systems_id)
+        JOIN sensor_nodes n USING (sensor_nodes_id)
+        WHERE n.source_name = %(source_name)s
         ORDER BY s.source_id
     """,
 }

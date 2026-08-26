@@ -74,7 +74,7 @@ WHERE is_new
   OR countries_id IS NULL;
 
 
--- we are going to update the source_id  where we are matching via geometry
+-- Update the matched nodes if anything has changed
 UPDATE sensor_nodes
 SET source_id = COALESCE(s.source_id, sensor_nodes.source_id)
   , geom = COALESCE(s.geom, sensor_nodes.geom)
@@ -83,14 +83,26 @@ SET source_id = COALESCE(s.source_id, sensor_nodes.source_id)
   , countries_id = COALESCE(s.countries_id, sensor_nodes.countries_id)
   , ismobile = COALESCE(s.ismobile, sensor_nodes.ismobile)
   , metadata = COALESCE(s.metadata, '{}') || COALESCE(sensor_nodes.metadata, '{}')
-  , modified_on = now()
+  , modified_on = clock_timestamp()
 FROM staging_sensornodes s
 WHERE sensor_nodes.sensor_nodes_id = s.sensor_nodes_id
---AND staging_sensornodes.matching_method = 'source-spatial'
-  ;
+AND (
+     COALESCE(s.source_id, sensor_nodes.source_id) IS DISTINCT FROM sensor_nodes.source_id
+  OR COALESCE(s.geom, sensor_nodes.geom) IS DISTINCT FROM sensor_nodes.geom
+  OR COALESCE(s.site_name, sensor_nodes.site_name) IS DISTINCT FROM sensor_nodes.site_name
+  OR COALESCE(s.timezones_id, sensor_nodes.timezones_id) IS DISTINCT FROM sensor_nodes.timezones_id
+  OR COALESCE(s.countries_id, sensor_nodes.countries_id) IS DISTINCT FROM sensor_nodes.countries_id
+  OR COALESCE(s.ismobile, sensor_nodes.ismobile) IS DISTINCT FROM sensor_nodes.ismobile
+  OR (COALESCE(s.metadata, '{}') || COALESCE(sensor_nodes.metadata, '{}'))
+       IS DISTINCT FROM sensor_nodes.metadata
+);
 
 
--- And now we insert those into the sensor nodes table
+-- And now we insert any new nodes into our sensor table
+-- currently has a bug where the source_name (provider) and the source_id
+  -- contstraint results in a moved (lat/long changed) node fails to insert
+  -- and instead updates the geometry of existing node. The only way I can
+  -- think to solve this issue is to not allow source_ids for spatial-source matches
 WITH inserts AS (
 INSERT INTO sensor_nodes (
   site_name
@@ -125,7 +137,15 @@ SET
     , metadata=COALESCE(sensor_nodes.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}')
     , timezones_id = COALESCE(EXCLUDED.timezones_id, sensor_nodes.timezones_id)
     , providers_id = COALESCE(EXCLUDED.providers_id, sensor_nodes.providers_id)
-    , modified_on = now()
+    , modified_on = clock_timestamp()
+WHERE COALESCE(EXCLUDED.site_name, sensor_nodes.site_name) IS DISTINCT FROM sensor_nodes.site_name
+   OR COALESCE(EXCLUDED.source_id, sensor_nodes.source_id) IS DISTINCT FROM sensor_nodes.source_id
+   OR COALESCE(EXCLUDED.ismobile, sensor_nodes.ismobile) IS DISTINCT FROM sensor_nodes.ismobile
+   OR COALESCE(EXCLUDED.geom, sensor_nodes.geom) IS DISTINCT FROM sensor_nodes.geom
+   OR COALESCE(EXCLUDED.timezones_id, sensor_nodes.timezones_id) IS DISTINCT FROM sensor_nodes.timezones_id
+   OR COALESCE(EXCLUDED.providers_id, sensor_nodes.providers_id) IS DISTINCT FROM sensor_nodes.providers_id
+   OR (COALESCE(sensor_nodes.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}'))
+        IS DISTINCT FROM sensor_nodes.metadata
 RETURNING 1)
 SELECT COUNT(1) INTO __inserted_nodes
 FROM inserts;
@@ -215,7 +235,10 @@ GROUP BY sensor_nodes_id, s.ingest_id, instruments_id, metadata
 ON CONFLICT (sensor_nodes_id, source_id) DO UPDATE SET
     metadata=COALESCE(sensor_systems.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}')
     , instruments_id = EXCLUDED.instruments_id
-    , modified_on = now();
+    , modified_on = clock_timestamp()
+WHERE (COALESCE(sensor_systems.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}'))
+        IS DISTINCT FROM sensor_systems.metadata
+   OR EXCLUDED.instruments_id IS DISTINCT FROM sensor_systems.instruments_id;
 
 ----------------------------
 -- lcs_ingest_sensors.sql --
@@ -328,7 +351,7 @@ ON CONFLICT (sensor_systems_id, measurands_id, source_id) DO UPDATE
   , data_logging_period_seconds = COALESCE(EXCLUDED.data_logging_period_seconds, sensors.data_logging_period_seconds)
   , data_averaging_period_seconds = COALESCE(EXCLUDED.data_averaging_period_seconds, sensors.data_averaging_period_seconds)
   , sensor_statuses_id = COALESCE(EXCLUDED.sensor_statuses_id, sensors.sensor_statuses_id)
-  , modified_on = now()
+  , modified_on = clock_timestamp()
  WHERE COALESCE(EXCLUDED.data_logging_period_seconds, sensors.data_logging_period_seconds)
          IS DISTINCT FROM sensors.data_logging_period_seconds
     OR COALESCE(EXCLUDED.data_averaging_period_seconds, sensors.data_averaging_period_seconds)
@@ -420,7 +443,7 @@ INSERT INTO flags (flag_types_id, sensor_nodes_id, sensors_ids, period, note)
  UPDATE flags fm
   SET period = sf.period + fm.period
   , note = sf.note
-  , modified_on = now()
+  , modified_on = clock_timestamp()
   FROM staging_flags sf
   WHERE sf.flags_id = fm.flags_id;
 
