@@ -15,38 +15,24 @@ BEGIN
 -- lcs_ingest_nodes.sql --
 --------------------------
 
-DELETE
-FROM staging_sensornodes
-WHERE staging_sensornodes.ingest_id IS NULL;
+-- DELETE
+-- FROM staging_sensornodes
+-- WHERE staging_sensornodes.ingest_id IS NULL;
 
-DELETE
-FROM staging_sensorsystems
-WHERE staging_sensorsystems.ingest_id IS NULL
-OR ingest_sensor_nodes_id IS NULL;
+-- DELETE
+-- FROM staging_sensorsystems
+-- WHERE staging_sensorsystems.ingest_id IS NULL
+-- OR ingest_sensor_nodes_id IS NULL;
 
-DELETE
-FROM staging_sensors
-WHERE staging_sensors.ingest_id IS NULL
-OR ingest_sensor_systems_id IS NULL;
+-- DELETE
+-- FROM staging_sensors
+-- WHERE staging_sensors.ingest_id IS NULL
+-- OR ingest_sensor_systems_id IS NULL;
 
 UPDATE staging_sensors
 SET units  = 'µg/m³'
 WHERE units IN ('µg/m��','��g/m³', 'ug/m3');
 
-
-
--- match the locations to existing nodes using the source_name/id combo
-UPDATE staging_sensornodes
-SET sensor_nodes_id = s.sensor_nodes_id
-, timezones_id = s.timezones_id
-, countries_id = s.countries_id
-, is_new = false
-, is_moved = st_astext(s.geom) != st_astext(staging_sensornodes.geom)
-FROM sensor_nodes s
-WHERE s.source_name = staging_sensornodes.source_name
-AND s.source_id = staging_sensornodes.source_id
-AND ( staging_sensornodes.matching_method IS NULL
- OR staging_sensornodes.matching_method = 'ingest-id');
 
 
 -- now update them using the source + spatial method
@@ -57,9 +43,11 @@ SET sensor_nodes_id = s.sensor_nodes_id
 , is_new = false
 , is_moved = st_astext(s.geom) != st_astext(staging_sensornodes.geom)
 FROM sensor_nodes s
+JOIN providers p ON (s.providers_id = p.providers_id)
 WHERE s.source_name = staging_sensornodes.source_name
-AND st_distance(staging_sensornodes.geom, s.geom) < 0.00001 -- about 1.11 meters difference
-AND staging_sensornodes.matching_method = 'source-spatial';
+AND s.source_id = staging_sensornodes.source_id
+AND st_distance(staging_sensornodes.geom, s.geom) < p.spatial_match_tolerance
+  ;
 
 
 -- only update the nodes where the geom has changed
@@ -128,7 +116,9 @@ SELECT site_name
 , countries_id
 FROM staging_sensornodes
 WHERE sensor_nodes_id IS NULL
-ON CONFLICT (source_name, source_id) DO UPDATE
+-- should rethink this ON CONFLICT clause
+--ON CONFLICT (source_name, source_id, geom) DO UPDATE
+ON CONFLICT ON CONSTRAINT sensor_nodes_deployment_key DO UPDATE
 SET
     site_name=coalesce(EXCLUDED.site_name,sensor_nodes.site_name)
     , source_id=COALESCE(EXCLUDED.source_id, sensor_nodes.source_id)

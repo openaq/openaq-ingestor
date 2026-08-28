@@ -376,7 +376,7 @@ def _create_node(cursor, node_spec: dict) -> dict:
         f"""
         INSERT INTO sensor_nodes (site_name, source_name, source_id, ismobile, geom)
         VALUES (%s, %s, %s, %s, {geom_sql})
-        ON CONFLICT (source_name, source_id) DO UPDATE
+        ON CONFLICT ON CONSTRAINT sensor_nodes_deployment_key DO UPDATE
           SET site_name = EXCLUDED.site_name,
               geom = EXCLUDED.geom
         RETURNING sensor_nodes_id
@@ -636,6 +636,12 @@ _QUERIES = {
         JOIN sensor_nodes n USING (sensor_nodes_id)
         WHERE n.source_name = %(source_name)s
         ORDER BY s.source_id
+    """,
+    "node_history": """
+        SELECT sensor_nodes_id, created
+        FROM sensor_nodes_history h
+        JOIN sensor_nodes n USING (sensor_nodes_id)
+        WHERE n.source_name = %(source_name)s
     """,
 }
 

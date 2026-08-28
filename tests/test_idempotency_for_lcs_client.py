@@ -22,6 +22,8 @@ from tests._debug import dump
 # Scenario helpers
 # ---------------------------------------------------------------------------
 
+## locations are added with default provider
+## and default provider has a tolerance of 0.002
 def _location(source, station, systems, lat=45.0, lon=-122.0, mobile=False):
     return {
         "key": f"{source}-{station}",
@@ -153,7 +155,7 @@ SCENARIOS = [
         "id": "source-spatial-within-threshold",
         "source": "replay6",
         "expected": {"nodes": 1, "systems": 1, "sensors": 1},
-        "coord_shift": (0.000005, 0.000005),  # ~0.5m
+        "coord_shift": (0.00005, 0.00005),  # ~0.5m
         "coord_shift_creates_node": False,
         "data": {
             "meta": {
@@ -171,7 +173,7 @@ SCENARIOS = [
         "id": "source-spatial-outside-threshold",
         "source": "replay7",
         "expected": {"nodes": 1, "systems": 1, "sensors": 1},
-        "coord_shift": (0.001, 0.001),  # ~111m
+        "coord_shift": (0.01, 0.01),
         "coord_shift_creates_node": True,
         "data": {
             "meta": {
@@ -207,6 +209,7 @@ def _capture_state(get_object, source_name):
         "nodes": get_object("nodes_by_source", source_name=source_name),
         "systems": get_object("systems_by_source", source_name=source_name),
         "sensors": get_object("sensors_by_source", source_name=source_name),
+        "history": get_object("node_history", source_name=source_name),
         "measurement_counts": {
             r["source_id"]: r["n"]
             for r in get_object("measurement_counts",
@@ -270,6 +273,9 @@ def test_replay_is_idempotent(
     assert sum(snapshot_1["measurement_counts"].values()) == total_measures, (
         f"pass 1: wrong measurement count for {source}"
     )
+    assert len(snapshot_1["history"]) == 0, (
+        f"pass 1: wrong history count for {source}"
+    )
 
     # ------- Pass 2: replay with advanced measurements -------
     fl2 = make_fetchlog(f"replay-{source}-pass2")
@@ -291,6 +297,10 @@ def test_replay_is_idempotent(
     assert snapshot_2["sensors"] == snapshot_1["sensors"], (
         f"{source}: sensors changed on replay"
     )
+    assert len(snapshot_2["history"]) == 0, (
+        f"pass 2: wrong history count for {source}"
+    )
+
 
     # Measurements: pass 2 added new rows, pass 1 rows untouched
     for source_id, count in snapshot_2["measurement_counts"].items():
@@ -324,11 +334,13 @@ def test_replay_is_idempotent(
 
     assert snapshot_3["systems"] == snapshot_2["systems"]
     assert snapshot_3["sensors"] == snapshot_2["sensors"]
-
+    assert len(snapshot_3["history"]) == 1, (
+        f"pass 3: wrong history count for {source}"
+    )
 
     # ------- Pass 4: shift coordinates -------
     fl4 = make_fetchlog(f"replay-{source}-pass4")
-    lat_delta, lon_delta = scenario.get("coord_shift", (0.001, 0.001))
+    lat_delta, lon_delta = scenario.get("coord_shift", (0.01, 0.01))
     shifted_data = _shift_coordinates(
         _advance_measurements(renamed_data, hours=3),
         lat_delta=lat_delta,
@@ -341,12 +353,8 @@ def test_replay_is_idempotent(
 
     snapshot_4 = _capture_state(get_object, source)
 
-    if scenario.get("coord_shift_creates_node", False):
+    if scenario.get("coord_shift_creates_node", True):
         # New node created; old one untouched
-        dump(get_object("staged_sensor_nodes"))
-        dump(get_object("nodes"))
-        dump([snapshot_3["nodes"]])
-        dump([snapshot_4["nodes"]])
         assert len(snapshot_4["nodes"]) == expected["nodes"] + 1
         prior_ids = {n["sensor_nodes_id"] for n in snapshot_3["nodes"]}
         new_ids = {n["sensor_nodes_id"] for n in snapshot_4["nodes"]}
@@ -355,6 +363,9 @@ def test_replay_is_idempotent(
     else:
         # Existing node updated in place
         assert len(snapshot_4["nodes"]) == expected["nodes"]
+        assert len(snapshot_4["history"]) == 2, (
+            f"pass 4: wrong history count for {source}"
+        )
         for n3, n4 in zip(snapshot_3["nodes"], snapshot_4["nodes"]):
             assert n4["sensor_nodes_id"] == n3["sensor_nodes_id"]
             assert n4["geom_wkt"] != n3["geom_wkt"]

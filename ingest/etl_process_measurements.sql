@@ -111,9 +111,9 @@ SELECT source_name
 FROM staging_measurements
 WHERE sensors_id IS NULL
 GROUP BY 1,2,3
-ON CONFLICT (source_name, source_id) DO UPDATE
-SET source_id = EXCLUDED.source_id
-, metadata = EXCLUDED.metadata||COALESCE(sensor_nodes.metadata, '{}'::jsonb)
+--ON CONFLICT (source_name, source_id, geom) DO UPDATE
+ON CONFLICT ON CONSTRAINT sensor_nodes_deployment_key DO UPDATE
+SET metadata = EXCLUDED.metadata||COALESCE(sensor_nodes.metadata, '{}'::jsonb)
 RETURNING sensor_nodes_id, source_id)
 INSERT INTO sensor_systems (
   sensor_nodes_id
