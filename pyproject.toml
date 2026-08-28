@@ -28,6 +28,9 @@ pytest-mock = "^3.14.0"
 pytest-cov = "^4.1.0"
 freezegun = "^1.5.0"
 pytest-timeout = "^2.4.0"
+psutils = "^3.3.15"
+psutil = "^7.2.2"
+pytest-watcher = "^0.6.3"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -45,7 +48,7 @@ markers = [
 ]
 
 log_cli = true
-log_cli_level = "INFO"
+log_cli_level = "DEBUG"
 log_cli_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 log_cli_date_format = "%H:%M:%S"
 

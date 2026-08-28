@@ -688,11 +688,11 @@ def write_csv(cursor, data, table, columns):
         >>> write_csv(cursor, data, 'measurements', ['id', 'value'])
         >>> connection.commit()
     """
-    logger.debug(f"copying {len(data)} rows from table: {table}")
+    logger.debug(f"copying {len(data)} rows to {table}")
     if len(data)>0:
         fields = ",".join(columns)
         sio = StringIO()
-        writer = csv.DictWriter(sio, columns)
+        writer = csv.DictWriter(sio, columns, extrasaction="ignore")
         writer.writerows(data)
         sio.seek(0)
         cursor.copy_expert(

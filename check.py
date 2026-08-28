@@ -16,6 +16,7 @@ import os
 import sys
 from pathlib import Path
 import psycopg2
+import traceback
 
 from ingest.lcsV2 import IngestClient
 from ingest.resources import Resources
@@ -82,6 +83,7 @@ def print_staging_summary(connection, id: int = -1):
         cursor.execute("""
             SELECT COUNT(*) FROM staging_sensornodes
             WHERE sensor_nodes_id IS NOT NULL
+            AND NOT is_new
         """)
         matched_nodes = cursor.fetchone()[0]
         print(f"   • Matched existing nodes: {matched_nodes}/{staging_nodes}")
@@ -142,7 +144,7 @@ def print_client_summary(client: IngestClient):
     print(f"\nNodes (locations): {len(client.nodes)}")
     if client.nodes:
         print("\nSample Nodes:")
-        for node in client.nodes[:5]:
+        for node in list(client.nodes.values())[:5]:
             site_name = node.get('site_name', 'N/A')
             ingest_id = node.get('ingest_id', 'N/A')
             print(f"  • {ingest_id}: {site_name}")
@@ -258,7 +260,7 @@ def main():
 
 
         ## now we load the data and print out some details
-        print_header(f"Loading {key}")
+        print_header(f"Loading {key}/{id}/load={not stage_only}")
         client.load_keys([[id, key, None]])
 
         ## print out some information about what was just loaded
@@ -269,6 +271,7 @@ def main():
         else:
             ## dump data into the database
             ## if not load we just insert to staging tables
+            print_header('Dumping data to DB')
             client.dump(load=(not stage_only))
 
             ## output what we have
@@ -292,6 +295,7 @@ def main():
     except Exception as e:
 
         print(f"✗ Error: {e}")
+        traceback.print_exc()
         sys.exit(1)
 
     finally:

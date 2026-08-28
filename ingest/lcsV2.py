@@ -42,6 +42,12 @@ warnings.filterwarnings(
     message="The localize method is no longer necessary, as this time zone supports the fold attribute",
 )
 
+MULTIPLIERS = {
+    "seconds": 1,
+    "minutes": 60,
+    "hours": 3600,
+    "days": 86400,
+}
 
 def to_geometry(key, data):
     # could be passed as lat/lng or coordinates
@@ -90,6 +96,13 @@ def to_timestamp(key, data):
 
     return dt.isoformat()
 
+def to_seconds(key, data):
+    param = data.get(key, {})
+    multiplier = MULTIPLIERS.get(param.get('unit'))
+    if param and multiplier:
+        value = param.get('value')
+        return int(value * multiplier)
+
 def to_sensorid(key, data):
     param = data.get(key)
     location = data.get('location')
@@ -110,13 +123,14 @@ class IngestClient:
         self.fetchlogs_id = fetchlogs_id
         self.keys = []
         self.st = datetime.now().replace(tzinfo=pytz.UTC)
-        self.sensors = []
-        self.systems = []
+
+        #self.systems = []
         self.flags = []
-        self.nodes = []
-        self.node_ids = []
-        self.system_ids = []
-        self.sensor_ids = []
+
+        self.nodes: dict[str, dict] = {}
+        self.systems: dict[str, dict] = {}
+        self.sensors: dict[str, dict] = {}
+
         self.measurements = []
         self.matching_method = 'ingest-id'
         self.source = None
@@ -129,15 +143,21 @@ class IngestClient:
             self.resources = Resources()
             self._owns_resources = True
 
+
         self.node_map = {
             "fetchlogs_id": {},
-            "site_name": { "col":"site_name" },
+            "site_name": {},
             "source_name": {},
+            "source_id": {}, ## ADDED
+            "site_id": { "col":"source_id" },
             "ismobile": {},
             "key": {"col":"ingest_id"},
             "ingest_id": {},
             "location": {"col":"ingest_id"},
             "sensor_node_id": {"col":"ingest_id"},
+            "interval_seconds": {},
+            "logging_interval_secs": {},
+            "averaging_interval_secs": {},
             "ingestMatchingMethod": {"col":"matching_method"},
             "matching_method": {},
             "label": {"col":"site_name"},
@@ -154,8 +174,11 @@ class IngestClient:
             "datetime": {"col": "datetime", "func": to_timestamp },
             "date": {"col": "datetime", "func": to_timestamp },
             "coordinates": {"col":"geom","func": to_geometry },
+            "averagingPeriod": {"col":"data_averaging_period_seconds", "func": to_seconds},
             "measure": {"col": "value"},
             "value": {},
+            "units": {},
+            "unit": {"col": "units"},
             "lat": {},
             "lon": {},
             "key":{"col": "ingest_id"},
@@ -215,7 +238,7 @@ class IngestClient:
         Dump the nodes into the temporary tables
         """
         db_table = "TEMP TABLE" if (settings.USE_TEMP_TABLES and load) else "TABLE"
-        logger.debug(f"Dumping {len(self.nodes)} nodes using {db_table} ({settings.USE_TEMP_TABLES}|{load})")
+        logger.debug(f"Dumping {len(self.nodes)} nodes using {db_table} (TEMP: {settings.USE_TEMP_TABLES}, LOADING: {load})")
         connection = self.get_connection(True)
         with connection.cursor() as cursor:
             start_time = time()
@@ -247,7 +270,7 @@ class IngestClient:
             logger.debug(f"Adding {len(self.nodes)} nodes to staging")
             write_csv(
                 cursor,
-                self.nodes,
+                self.nodes.values(),
                 "staging_sensornodes",
                 [
                     "ingest_id",
@@ -265,7 +288,7 @@ class IngestClient:
             logger.debug(f"Adding {len(self.systems)} systems to staging")
             write_csv(
                 cursor,
-                self.systems,
+                self.systems.values(),
                 "staging_sensorsystems",
                 [
                     "ingest_id",
@@ -279,7 +302,7 @@ class IngestClient:
             logger.debug(f"Adding {len(self.sensors)} sensors to staging")
             write_csv(
                 cursor,
-                self.sensors,
+                self.sensors.values(),
                 "staging_sensors",
                 [
                     "ingest_id",
@@ -346,12 +369,13 @@ class IngestClient:
                 table=db_table
             ))
 
+            logger.debug(self.measurements)
             iterator = StringIteratorIO(
                 ("\t".join(map(clean_csv_value, line)) + "\n" for line in self.measurements)
             )
             cursor.copy_expert(
                 """
-                COPY staging_measurements (ingest_id, source_name, source_id, measurand, value, datetime, lon, lat, fetchlogs_id)
+                COPY staging_measurements (ingest_id, source_name, source_id, measurand, units, value, datetime, lon, lat, fetchlogs_id)
                 FROM stdin;
                 """,
                 iterator,
@@ -389,24 +413,6 @@ class IngestClient:
             self.load_measurements(data.get('measurements'))
 
 
-    # def reset(self):
-    #     """
-    #     Reset the client to the new state. Mostly for testing purposes
-    #     """
-    #     logger.debug("Reseting the client data")
-    #     self.measurements = []
-    #     self.nodes = []
-    #     self.systems = []
-    #     self.sensors = []
-    #     self.flags = []
-    #     self.keys = []
-    #     self.key = None
-    #     self.fetchlogs_id = None
-    #     self.node_ids = []
-    #     self.system_ids = []
-    #     self.sensor_ids = []
-
-
     def load_keys(self, rows):
         # for each fetchlog we need to read and load
         for row in rows:
@@ -418,6 +424,7 @@ class IngestClient:
             except Exception as e:
                 with self.get_connection(True).cursor() as cursor:
                     load_fail(cursor, fetchlogs_id, e);
+
 
 
     def load_key(self, key, fetchlogs_id, last_modified):
@@ -435,22 +442,53 @@ class IngestClient:
         else:
             content = get_object(key)
 
-        if is_json:
-            logger.debug(f"Read JSON containing {len(content)} characters")
-        else:
-            logger.debug(f"Read CSV containing {len(content)} lines")
 
         if is_csv:
             # all csv data will be measurements
             for rw in csv.reader(content.split("\n")):
                 self.add_measurement(rw)
         elif is_ndjson:
+            ## instead of reshaping the data lets just loop through and add
+            ## each node, system and sensor as we go
             measures = []
-            for obj in content.split('\n'):
+            locations = []
+            ingest_ids = []
+            for idx, obj in enumerate(content.split('\n')):
                 if obj != "":
-                    measures.append(orjson.loads(obj))
-            data = { "measures": measures }
-            self.load(data)
+                    nd = orjson.loads(obj)
+                    ## this will be used as the node and system ingest id
+                    ingest_id = f"{nd.get('sourceName')}-{nd.get('location')}"
+                    sensor_ingest_id = f"{ingest_id}-{nd.get('parameter')}"
+                    if ingest_id not in self.nodes:
+                        attributes = nd.get('attribution', [{}])[0]
+                        self.add_node({
+                            "ingestMatchingMethod": "source-spatial",
+                            "source_name": nd.get("sourceName"),
+                            "source_id": nd.get("location"),
+                            "site_name": attributes.get("name"),
+                            "coordinates": nd.get("coordinates"),
+                            "ismobile": nd.get("mobile"),
+                            "ingest_id": ingest_id,
+                            "systems": [{
+                                "key":  ingest_id,
+                                "sensors": [{
+                                    "key": sensor_ingest_id,
+                                    "units": nd.get("unit"),
+                                    "interval_seconds": to_seconds('averagingPeriod', nd)
+                                }]
+                            }]
+                        })
+                    ## Systems will be the same for all sensors for one node
+                    ## but its possible that we may have already added the node but
+                    ## not this specific parameter/sensor
+                    if sensor_ingest_id not in self.sensors:
+                        self.add_sensors([{
+                            "key": sensor_ingest_id,
+                            "units": nd.get("unit"),
+                        }], ingest_id, fetchlogs_id)
+                    ## all measurements should be added
+                    self.add_measurement(nd)
+
         elif is_json:
             # all json data should just be parsed and loaded
             data = orjson.loads(content)
@@ -470,9 +508,13 @@ class IngestClient:
 
     def load_metadata(self, meta):
         if "source" in meta.keys():
+            self.source = meta.get('source')
+        if "sourceName" in meta.keys():
             self.source = meta.get('sourceName')
         if "ingestMatchingMethod" in meta.keys():
             self.matching_method = meta.get('ingestMatchingMethod')
+        if "matching_method" in meta.keys():
+            self.matching_method = meta.get('matching_method')
         if "schema" in meta.keys():
             self.schema = meta.get('schema')
 
@@ -492,6 +534,7 @@ class IngestClient:
             metadata = {}
             sensor["ingest_sensor_systems_id"] = system_id
             sensor["fetchlogs_id"] = fetchlogsId
+            sensor["status"] = 'active' ## default to active
 
             if "sensor_id" in s:
                 id = s.get("sensor_id")
@@ -502,7 +545,7 @@ class IngestClient:
             else:
                 id = system_id
 
-            if id in self.sensor_ids:
+            if id in self.sensors:
                 # would it make more sense to merge or skip or throw error?
                 # merge and submit a warning maybe?
                 continue
@@ -514,24 +557,29 @@ class IngestClient:
                 key = str.replace(key, "sensor_", "")
                 if key == "flags":
                     self.add_flags(value, id, fetchlogsId)
-                elif key == "measurand_parameter":
+                elif key in ["measurand_parameter", "parameter"]:
                     sensor["measurand"] = value
-                elif key == "measurand_unit":
+                elif key in ["units", "measurand_unit"]:
                     sensor["units"] = fix_units(value)
                 elif key == "status":
                     sensor["status"] = value
-                elif key == "interval_seconds":
+                elif key == "averaging_interval_secs" and value:
+                    sensor["averaging_interval_seconds"] = value
+                elif key == "logging_interval_secs" and value:
+                    sensor["logging_interval_seconds"] = value
+                elif key == "interval_seconds" and value:
                     sensor["logging_interval_seconds"] = value
                     sensor["averaging_interval_seconds"] = value
-                else:
+                elif key not in ["sensor_id","key","id"]:
                     metadata[key] = value
+
             if not sensor.get('measurand'):
                 # get it from the ingest id
                 ingest_arr = sensor.get('ingest_id').split('-')
                 sensor['measurand'] = ingest_arr[-1] # take the last one
             sensor["metadata"] = orjson.dumps(metadata).decode()
-            self.sensors.append(sensor)
-            self.sensor_ids.append(id)
+            self.sensors[id] = sensor
+
 
     def add_flags(self, flags, sensor_id, fetchlogsId, dt=None):
         for f in flags:
@@ -607,7 +655,6 @@ class IngestClient:
     #         self.flags.append(flag)
 
     def add_systems(self, j, node_id, fetchlogsId):
-        logger.debug(f'adding system')
         for s in j:
             system = {}
             metadata = {}
@@ -620,42 +667,63 @@ class IngestClient:
             else:
                 id = node_id
 
-            if id in self.system_ids:
+            if id in self.systems:
                 # would it make more sense to merge or skip or throw error?
                 continue
 
             ingest_arr = id.split('-')
             # this will not work with a uuid passed as a site id
             if len(ingest_arr) == 3:
-                system["instrument_ingest_id"] = ingest_arr[-1];
+                instrument = (ingest_arr[-1]).split('::')
+                system['manufacturer'] = instrument[0]
+                system['model'] = instrument[1] if len(instrument)>1 else 'default'
+                #system["instrument_ingest_id"] = ingest_arr[-1];
 
             system["ingest_sensor_nodes_id"] = node_id
+
             system["ingest_id"] = id
             system["fetchlogs_id"] = fetchlogsId
             for key, value in s.items():
                 key = str.replace(key, "sensor_system_", "")
                 if key == "sensors":
                     self.add_sensors(value, id, fetchlogsId)
-                else:
+                elif key == 'manufacturer_name':
+                    system['manufacturer'] = s.get('manufacturer_name')
+                elif key == 'model_name':
+                    system['model'] = s.get('model_name')
+                elif key == 'instrument':
+                    instrument = s.get('instrument').split('::')
+                    system['manufacturer'] = instrument[0]
+                    system['model'] = instrument[1] if len(instrument)>1 else 'default'
+                elif key not in ["sensor_system_id","key","system_id"]:
                     metadata[key] = value
+
             system["metadata"] = orjson.dumps(metadata).decode()
 
-            self.systems.append(system)
-            self.system_ids.append(id)
+            if system.get('manufacturer') in (None,'default'):
+                system['manufacturer'] = ingest_arr[0]
+
+            if 'model' not in system.keys():
+                system['model'] = 'default'
+
+            logger.debug(f"Adding system {id}")
+            self.systems[id] = system
+
 
     def add_node(self, j):
         fetchlogs_id = j.get('fetchlogs_id', self.fetchlogs_id)
         node = { "fetchlogs_id": fetchlogs_id }
         metadata = {}
-        mp = self.node_map
+        #mp = self.node_map
+
 
         for k, v in j.items():
             # pass the whole measure
-            col, value = self.process(k, j, self.node_map)
-            if col is not None:
-                node[col] = value
-            else:
-                if not k in ['systems','sensor_system']:
+            if k not in ['systems','sensor_system','flags']:
+                col, value = self.process(k, j, self.node_map)
+                if col is not None:
+                    node[col] = value
+                else:
                     metadata[k] = v
 
         # make sure we actually have data to add
@@ -667,6 +735,7 @@ class IngestClient:
                 raise Exception('Missing ingest id')
 
             ingest_arr = ingest_id.split('-')
+
             # source name could be set explicitly
             # or in the ingest id
             # or in the metadata
@@ -686,7 +755,7 @@ class IngestClient:
                 else:
                     node['source_id'] = ingest_arr[0]
 
-            if node.get('ingestMatchingMethod') is None:
+            if node.get('matching_method') is None:
                 node['matching_method'] = self.matching_method
 
             # check for flags
@@ -694,10 +763,10 @@ class IngestClient:
 
             # prevent adding the node more than once
             # this does not save processing time of course
-            if ingest_id not in self.node_ids:
+            if ingest_id not in self.nodes:
+                logger.debug(f"Adding node {ingest_id}")
                 node["metadata"] = orjson.dumps(metadata).decode()
-                self.node_ids.append(ingest_id)
-                self.nodes.append(node)
+                self.nodes[ingest_id] = node
             # now look for systems
             if "sensor_system" in j.keys():
                 self.add_systems(j.get('sensor_system'), node.get('ingest_id'), node.get('fetchlogs_id'))
@@ -705,7 +774,9 @@ class IngestClient:
                 self.add_systems(j.get("systems"), node.get('ingest_id'), node.get('fetchlogs_id'))
             else:
                 # no systems
-                logger.debug(j.keys())
+                self.add_systems([{}], node.get('ingest_id'), node.get('fetchlogs_id'))
+
+
         else:
             logger.warning('nothing mapped to node')
 
@@ -717,7 +788,7 @@ class IngestClient:
         meas = {}
         lat = None
         lon = None
-
+        units = None
         # csv method
         if isinstance(m, list):
             if len(m) < 3:
@@ -744,6 +815,12 @@ class IngestClient:
             ingest_id = meas.get('ingest_id')
             datetime = meas.get('datetime')
             value = meas.get('value')
+            units = meas.get('units')
+            if units is None:
+                ## if the data is new and the sensor exists
+                ## not sure its worth doing this, lets revisit after the etl updates
+                units = self.sensors.get(ingest_id, {}).get('units')
+
             lon = meas.get('lon', None)
             lat = meas.get('lat', None)
             fetchlogs_id = m.get('fetchlogs_id', self.fetchlogs_id)
@@ -759,12 +836,25 @@ class IngestClient:
             logger.warning(f'Not enough information in ingest-id: `{ingest_id}`')
             return
 
-        source_name = ingest_arr[0]
-        source_id = '-'.join(ingest_arr[1:len(ingest_arr)-1])
-        measurand = ingest_arr[-1]
+        elif len(ingest_arr) >= 3:
+            source_name = ingest_arr[0]
+            source_id = '-'.join(ingest_arr[1:len(ingest_arr)-1])
+            measurand = ingest_arr[-1]
 
         if not None in [ingest_id, datetime, source_name, source_id, measurand]:
-            self.measurements.append([ingest_id, source_name, source_id, measurand, value, datetime, lon, lat, fetchlogs_id])
+            ## this is to solve a realtime issue
+            if ingest_id not in self.sensors:
+                ## I need to look up the node
+                node_ingest_id = f"{source_name}-{source_id}"
+                node = self.nodes.get(node_ingest_id, {})
+                self.add_sensors([{
+                    "key": ingest_id,
+                    "averaging_interval_secs": node.get("averaging_interval_secs"),
+                    "logging_interval_secs": node.get("logging_interval_secs")
+                }], node_ingest_id, fetchlogs_id)
+            self.measurements.append([ingest_id, source_name, source_id, measurand, units, value, datetime, lon, lat, fetchlogs_id])
+        else:
+            logger.warning(f"Something was not set {[ingest_id, datetime, source_name, source_id, measurand]} - {ingest_arr} - {m}")
 
 
     def refresh_cached_tables(self):

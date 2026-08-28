@@ -15,38 +15,24 @@ BEGIN
 -- lcs_ingest_nodes.sql --
 --------------------------
 
-DELETE
-FROM staging_sensornodes
-WHERE staging_sensornodes.ingest_id IS NULL;
+-- DELETE
+-- FROM staging_sensornodes
+-- WHERE staging_sensornodes.ingest_id IS NULL;
 
-DELETE
-FROM staging_sensorsystems
-WHERE staging_sensorsystems.ingest_id IS NULL
-OR ingest_sensor_nodes_id IS NULL;
+-- DELETE
+-- FROM staging_sensorsystems
+-- WHERE staging_sensorsystems.ingest_id IS NULL
+-- OR ingest_sensor_nodes_id IS NULL;
 
-DELETE
-FROM staging_sensors
-WHERE staging_sensors.ingest_id IS NULL
-OR ingest_sensor_systems_id IS NULL;
+-- DELETE
+-- FROM staging_sensors
+-- WHERE staging_sensors.ingest_id IS NULL
+-- OR ingest_sensor_systems_id IS NULL;
 
 UPDATE staging_sensors
 SET units  = 'µg/m³'
 WHERE units IN ('µg/m��','��g/m³', 'ug/m3');
 
-
-
--- match the locations to existing nodes using the source_name/id combo
-UPDATE staging_sensornodes
-SET sensor_nodes_id = s.sensor_nodes_id
-, timezones_id = s.timezones_id
-, countries_id = s.countries_id
-, is_new = false
-, is_moved = st_astext(s.geom) != st_astext(staging_sensornodes.geom)
-FROM sensor_nodes s
-WHERE s.source_name = staging_sensornodes.source_name
-AND s.source_id = staging_sensornodes.source_id
-AND ( staging_sensornodes.matching_method IS NULL
- OR staging_sensornodes.matching_method = 'ingest-id');
 
 
 -- now update them using the source + spatial method
@@ -57,9 +43,11 @@ SET sensor_nodes_id = s.sensor_nodes_id
 , is_new = false
 , is_moved = st_astext(s.geom) != st_astext(staging_sensornodes.geom)
 FROM sensor_nodes s
+JOIN providers p ON (s.providers_id = p.providers_id)
 WHERE s.source_name = staging_sensornodes.source_name
-AND st_distance(staging_sensornodes.geom, s.geom) < 0.00001 -- about 1.11 meters difference
-AND staging_sensornodes.matching_method = 'source-spatial';
+AND s.source_id = staging_sensornodes.source_id
+AND st_distance(staging_sensornodes.geom, s.geom) < p.spatial_match_tolerance
+  ;
 
 
 -- only update the nodes where the geom has changed
@@ -74,8 +62,7 @@ WHERE is_new
   OR countries_id IS NULL;
 
 
--- we are going to update the source_id  where we are matching via geometry
--- for ingest-id matches this should not matter.
+-- Update the matched nodes if anything has changed
 UPDATE sensor_nodes
 SET source_id = COALESCE(s.source_id, sensor_nodes.source_id)
   , geom = COALESCE(s.geom, sensor_nodes.geom)
@@ -84,12 +71,26 @@ SET source_id = COALESCE(s.source_id, sensor_nodes.source_id)
   , countries_id = COALESCE(s.countries_id, sensor_nodes.countries_id)
   , ismobile = COALESCE(s.ismobile, sensor_nodes.ismobile)
   , metadata = COALESCE(s.metadata, '{}') || COALESCE(sensor_nodes.metadata, '{}')
-  , modified_on = now()
+  , modified_on = clock_timestamp()
 FROM staging_sensornodes s
-WHERE sensor_nodes.sensor_nodes_id = s.sensor_nodes_id;
+WHERE sensor_nodes.sensor_nodes_id = s.sensor_nodes_id
+AND (
+     COALESCE(s.source_id, sensor_nodes.source_id) IS DISTINCT FROM sensor_nodes.source_id
+  OR COALESCE(s.geom, sensor_nodes.geom) IS DISTINCT FROM sensor_nodes.geom
+  OR COALESCE(s.site_name, sensor_nodes.site_name) IS DISTINCT FROM sensor_nodes.site_name
+  OR COALESCE(s.timezones_id, sensor_nodes.timezones_id) IS DISTINCT FROM sensor_nodes.timezones_id
+  OR COALESCE(s.countries_id, sensor_nodes.countries_id) IS DISTINCT FROM sensor_nodes.countries_id
+  OR COALESCE(s.ismobile, sensor_nodes.ismobile) IS DISTINCT FROM sensor_nodes.ismobile
+  OR (COALESCE(s.metadata, '{}') || COALESCE(sensor_nodes.metadata, '{}'))
+       IS DISTINCT FROM sensor_nodes.metadata
+);
 
 
--- And now we insert those into the sensor nodes table
+-- And now we insert any new nodes into our sensor table
+-- currently has a bug where the source_name (provider) and the source_id
+  -- contstraint results in a moved (lat/long changed) node fails to insert
+  -- and instead updates the geometry of existing node. The only way I can
+  -- think to solve this issue is to not allow source_ids for spatial-source matches
 WITH inserts AS (
 INSERT INTO sensor_nodes (
   site_name
@@ -115,7 +116,9 @@ SELECT site_name
 , countries_id
 FROM staging_sensornodes
 WHERE sensor_nodes_id IS NULL
-ON CONFLICT (source_name, source_id) DO UPDATE
+-- should rethink this ON CONFLICT clause
+--ON CONFLICT (source_name, source_id, geom) DO UPDATE
+ON CONFLICT ON CONSTRAINT sensor_nodes_deployment_key DO UPDATE
 SET
     site_name=coalesce(EXCLUDED.site_name,sensor_nodes.site_name)
     , source_id=COALESCE(EXCLUDED.source_id, sensor_nodes.source_id)
@@ -124,7 +127,15 @@ SET
     , metadata=COALESCE(sensor_nodes.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}')
     , timezones_id = COALESCE(EXCLUDED.timezones_id, sensor_nodes.timezones_id)
     , providers_id = COALESCE(EXCLUDED.providers_id, sensor_nodes.providers_id)
-    , modified_on = now()
+    , modified_on = clock_timestamp()
+WHERE COALESCE(EXCLUDED.site_name, sensor_nodes.site_name) IS DISTINCT FROM sensor_nodes.site_name
+   OR COALESCE(EXCLUDED.source_id, sensor_nodes.source_id) IS DISTINCT FROM sensor_nodes.source_id
+   OR COALESCE(EXCLUDED.ismobile, sensor_nodes.ismobile) IS DISTINCT FROM sensor_nodes.ismobile
+   OR COALESCE(EXCLUDED.geom, sensor_nodes.geom) IS DISTINCT FROM sensor_nodes.geom
+   OR COALESCE(EXCLUDED.timezones_id, sensor_nodes.timezones_id) IS DISTINCT FROM sensor_nodes.timezones_id
+   OR COALESCE(EXCLUDED.providers_id, sensor_nodes.providers_id) IS DISTINCT FROM sensor_nodes.providers_id
+   OR (COALESCE(sensor_nodes.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}'))
+        IS DISTINCT FROM sensor_nodes.metadata
 RETURNING 1)
 SELECT COUNT(1) INTO __inserted_nodes
 FROM inserts;
@@ -214,7 +225,10 @@ GROUP BY sensor_nodes_id, s.ingest_id, instruments_id, metadata
 ON CONFLICT (sensor_nodes_id, source_id) DO UPDATE SET
     metadata=COALESCE(sensor_systems.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}')
     , instruments_id = EXCLUDED.instruments_id
-    , modified_on = now();
+    , modified_on = clock_timestamp()
+WHERE (COALESCE(sensor_systems.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}'))
+        IS DISTINCT FROM sensor_systems.metadata
+   OR EXCLUDED.instruments_id IS DISTINCT FROM sensor_systems.instruments_id;
 
 ----------------------------
 -- lcs_ingest_sensors.sql --
@@ -249,6 +263,7 @@ FROM r;
  -- We do not want to create default sensors because we are not dealling with measurements here
 UPDATE staging_sensors
 SET sensor_systems_id = staging_sensorsystems.sensor_systems_id
+  , is_new = FALSE
 FROM staging_sensorsystems
 WHERE staging_sensors.ingest_sensor_systems_id = staging_sensorsystems.ingest_id;
 
@@ -275,10 +290,8 @@ AND sensors.source_id = staging_sensors.ingest_id;
 
 UPDATE staging_sensors
 SET measurands_id = m.measurands_id
-FROM (SELECT measurand, MIN(measurands_id) AS measurands_id FROM measurands GROUP BY measurand) as m
-WHERE staging_sensors.measurand=m.measurand
---AND staging_sensors.units=measurands.units
-;
+FROM (SELECT key,  measurands_id FROM measurands_map_view) as m
+WHERE staging_sensors.measurand=m.key;
 
 
 WITH r AS (
@@ -322,12 +335,22 @@ GROUP BY ingest_id
 , ss.sensor_statuses_id
 , metadata
 ON CONFLICT (sensor_systems_id, measurands_id, source_id) DO UPDATE
-SET metadata = COALESCE(sensors.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}')
-  , data_logging_period_seconds = EXCLUDED.data_logging_period_seconds
-  , data_averaging_period_seconds = EXCLUDED.data_averaging_period_seconds
-  , sensor_statuses_id = EXCLUDED.sensor_statuses_id
-  , modified_on = now()
-RETURNING 1)
+ SET metadata = COALESCE(sensors.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}')
+  -- in a situation where we have limited data updating an existing record
+  -- we need to be careful we dont overwrite anything
+  , data_logging_period_seconds = COALESCE(EXCLUDED.data_logging_period_seconds, sensors.data_logging_period_seconds)
+  , data_averaging_period_seconds = COALESCE(EXCLUDED.data_averaging_period_seconds, sensors.data_averaging_period_seconds)
+  , sensor_statuses_id = COALESCE(EXCLUDED.sensor_statuses_id, sensors.sensor_statuses_id)
+  , modified_on = clock_timestamp()
+ WHERE COALESCE(EXCLUDED.data_logging_period_seconds, sensors.data_logging_period_seconds)
+         IS DISTINCT FROM sensors.data_logging_period_seconds
+    OR COALESCE(EXCLUDED.data_averaging_period_seconds, sensors.data_averaging_period_seconds)
+         IS DISTINCT FROM sensors.data_averaging_period_seconds
+    OR COALESCE(EXCLUDED.sensor_statuses_id, sensors.sensor_statuses_id)
+         IS DISTINCT FROM sensors.sensor_statuses_id
+    --OR (COALESCE(sensors.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}'))
+    --     IS DISTINCT FROM sensors.metadata
+    RETURNING 1)
 SELECT COUNT(1) INTO __inserted_sensors
 FROM inserts;
 
@@ -349,7 +372,6 @@ WHERE sensors_id IS NULL
 RETURNING 1)
 SELECT COUNT(1) INTO __rejected_sensors
 FROM r;
-
 
 -- update the period so that we dont have to keep doing it later
 -- we could do this on import as well if we feel this is slowing us down
@@ -411,7 +433,7 @@ INSERT INTO flags (flag_types_id, sensor_nodes_id, sensors_ids, period, note)
  UPDATE flags fm
   SET period = sf.period + fm.period
   , note = sf.note
-  , modified_on = now()
+  , modified_on = clock_timestamp()
   FROM staging_flags sf
   WHERE sf.flags_id = fm.flags_id;
 
