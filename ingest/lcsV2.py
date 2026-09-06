@@ -10,6 +10,8 @@ from time import time
 from urllib.parse import unquote_plus
 import warnings
 import re
+import geohash
+import traceback
 
 import boto3
 import psycopg2
@@ -56,6 +58,8 @@ def to_geometry(key, data):
 
     if key == 'coordinates':
         data = data.get(key)
+        if data is None:
+            raise Exception('Missing value for coordinates')
 
     if 'lat' in data:
         lat = data.get('lat')
@@ -97,8 +101,11 @@ def to_timestamp(key, data):
     return dt.isoformat()
 
 def to_seconds(key, data):
-    param = data.get(key, {})
-    multiplier = MULTIPLIERS.get(param.get('unit'))
+    param = data.get(key)
+    if param is None:
+        return
+    unit = param.get('unit', '')
+    multiplier = MULTIPLIERS.get(unit)
     if param and multiplier:
         value = param.get('value')
         return int(value * multiplier)
@@ -369,7 +376,6 @@ class IngestClient:
                 table=db_table
             ))
 
-            logger.debug(self.measurements)
             iterator = StringIteratorIO(
                 ("\t".join(map(clean_csv_value, line)) + "\n" for line in self.measurements)
             )
@@ -454,40 +460,65 @@ class IngestClient:
             locations = []
             ingest_ids = []
             for idx, obj in enumerate(content.split('\n')):
-                if obj != "":
-                    nd = orjson.loads(obj)
-                    ## this will be used as the node and system ingest id
-                    ingest_id = f"{nd.get('sourceName')}-{nd.get('location')}"
-                    sensor_ingest_id = f"{ingest_id}-{nd.get('parameter')}"
-                    if ingest_id not in self.nodes:
-                        attributes = nd.get('attribution', [{}])[0]
-                        self.add_node({
-                            "ingestMatchingMethod": "source-spatial",
-                            "source_name": nd.get("sourceName"),
-                            "source_id": nd.get("location"),
-                            "site_name": attributes.get("name"),
-                            "coordinates": nd.get("coordinates"),
-                            "ismobile": nd.get("mobile"),
-                            "ingest_id": ingest_id,
-                            "systems": [{
-                                "key":  ingest_id,
-                                "sensors": [{
-                                    "key": sensor_ingest_id,
-                                    "units": nd.get("unit"),
-                                    "interval_seconds": to_seconds('averagingPeriod', nd)
+                try:
+                    if obj != "":
+                        nd = orjson.loads(obj)
+                        ## this will be used as the node and system ingest id
+                        coords = nd.get('coordinates', {})
+                        if None in [coords.get('latitude'), coords.get('longitude')]:
+                            logger.debug('Missing coordinates')
+                            continue
+                        geo = geohash.encode(coords.get('latitude'), coords.get('longitude'), 9)
+                        ingest_id = f"{nd.get('sourceName')}-{geo}"
+                        #ingest_id = f"{nd.get('sourceName')}"
+                        sensor_ingest_id = f"{ingest_id}-{nd.get('parameter')}"
+                        interval_seconds = to_seconds('averagingPeriod', nd)
+                        units = nd.get("unit", "")
+                        parameter = f"{nd.get("parameter", "")}{units}"
+                        if ingest_id not in self.nodes:
+                            attributes = nd.get('attribution', [{}])[0]
+                            self.add_node({
+                                "ingestMatchingMethod": "source-spatial",
+                                "source_name": nd.get("sourceName"),
+                                "source_id": geo,
+                                "site_name": nd.get("location"),#attributes.get("name"),
+                                "coordinates": coords,
+                                "ismobile": nd.get("mobile"),
+                                "ingest_id": ingest_id,
+                                "systems": [{
+                                    "key":  ingest_id,
+                                    "sensors": [{
+                                        "key": sensor_ingest_id,
+                                        "units": units,
+                                        "parameter": parameter,
+                                        "interval_seconds": interval_seconds
+                                    }]
                                 }]
-                            }]
+                            })
+                        ## Systems will be the same for all sensors for one node
+                        ## but its possible that we may have already added the node but
+                        ## not this specific parameter/sensor
+                        if sensor_ingest_id not in self.sensors:
+                            self.add_sensors([{
+                                "key": sensor_ingest_id,
+                                "units": units,
+                                "parameter": parameter,
+                                "interval_seconds": interval_seconds
+                            }], ingest_id, fetchlogs_id)
+                        ## all measurements should be added
+                        self.add_measurement({
+                            "ingest_id": sensor_ingest_id,
+                            "date": nd.get("date"),
+                            "parameter": parameter,
+                            "unit": units,
+                            "value": nd.get("value"),
+                            "averagingPeriod": nd.get("averagingPeriod"),
                         })
-                    ## Systems will be the same for all sensors for one node
-                    ## but its possible that we may have already added the node but
-                    ## not this specific parameter/sensor
-                    if sensor_ingest_id not in self.sensors:
-                        self.add_sensors([{
-                            "key": sensor_ingest_id,
-                            "units": nd.get("unit"),
-                        }], ingest_id, fetchlogs_id)
-                    ## all measurements should be added
-                    self.add_measurement(nd)
+                except Exception as e:
+                    logger.error(f"LOADING NDJSON: {ingest_id} - {e}")
+                    logger.error(nd)
+                    logger.error(traceback.format_exc())
+                    raise
 
         elif is_json:
             # all json data should just be parsed and loaded
@@ -552,7 +583,7 @@ class IngestClient:
 
             sensor["ingest_id"] = id
 
-            logger.debug(f"Adding sensor {s.get('key')}")
+            logger.debug(f"Adding sensor {id}")
             for key, value in s.items():
                 key = str.replace(key, "sensor_", "")
                 if key == "flags":
@@ -578,7 +609,8 @@ class IngestClient:
                 ingest_arr = sensor.get('ingest_id').split('-')
                 sensor['measurand'] = ingest_arr[-1] # take the last one
             sensor["metadata"] = orjson.dumps(metadata).decode()
-            self.sensors[id] = sensor
+            if id not in self.sensors:
+                self.sensors[id] = sensor
 
 
     def add_flags(self, flags, sensor_id, fetchlogsId, dt=None):
@@ -715,8 +747,6 @@ class IngestClient:
         node = { "fetchlogs_id": fetchlogs_id }
         metadata = {}
         #mp = self.node_map
-
-
         for k, v in j.items():
             # pass the whole measure
             if k not in ['systems','sensor_system','flags']:
@@ -764,7 +794,7 @@ class IngestClient:
             # prevent adding the node more than once
             # this does not save processing time of course
             if ingest_id not in self.nodes:
-                logger.debug(f"Adding node {ingest_id}")
+                logger.debug(f"Adding node {ingest_id} / {node.get('geom')}")
                 node["metadata"] = orjson.dumps(metadata).decode()
                 self.nodes[ingest_id] = node
             # now look for systems
@@ -809,7 +839,8 @@ class IngestClient:
                 # pass the whole measure
                 col, value = self.process(k, m, self.measurement_map)
                 logger.log(VERBOSE_LEVEL, f"Mapping data: {k}/{v} = {col}/{value}")
-                if col is not None:
+                ## Do not overwrite something that already exists
+                if col is not None and meas.get(col) is None:
                     meas[col] = value
 
             ingest_id = meas.get('ingest_id')
@@ -947,6 +978,166 @@ class IngestClient:
             logger.debug(f"get_metadata:hasnew - {self.keys}")
             self.load_data()
 
+
+    def summary(self) -> dict:
+        """Return a summary of what's currently loaded in the client.
+
+        Useful for reporting before/after dump operations, in tests,
+        or in any tool that wants to inspect client state.
+
+        Returns:
+            dict with counts and sample rows for nodes, systems, sensors,
+            measurements, and flags.
+        """
+        return {
+            "keys": len(self.keys),
+            "nodes": len(self.nodes),
+            "systems": len(self.systems),
+            "sensors": len(self.sensors),
+            "measurements": len(self.measurements),
+            "flags": len(self.flags),
+            "sample_nodes": list(self.nodes.values())[:5],
+            "sample_measurements": self.measurements[:10],
+        }
+
+    def staging_counts(self, connection=None) -> dict:
+        """Return counts from staging tables.
+
+        Args:
+            connection: optional psycopg2 connection; defaults to client's own.
+
+        Returns:
+            dict with counts for staging_sensornodes, staging_sensorsystems,
+            staging_sensors, staging_measurements, plus matched_nodes and
+            rejects for this client's fetchlogs_id.
+        """
+        conn = connection or self.get_connection(True)
+        counts = {}
+        with conn.cursor() as cursor:
+            for table in ("staging_sensornodes", "staging_sensorsystems",
+                          "staging_sensors", "staging_measurements"):
+                cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                counts[table] = cursor.fetchone()[0]
+
+            cursor.execute("""
+                SELECT COUNT(*) FROM staging_sensornodes
+                WHERE sensor_nodes_id IS NOT NULL AND NOT is_new
+            """)
+            counts["matched_nodes"] = cursor.fetchone()[0]
+
+            cursor.execute("""
+                SELECT MIN(datetime), MAX(datetime)
+                FROM staging_measurements
+            """)
+            counts["staging_date_range"] = cursor.fetchone()
+
+            if self.fetchlogs_id is not None:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM rejects WHERE fetchlogs_id = %s",
+                    (self.fetchlogs_id,),
+                )
+                counts["rejects"] = cursor.fetchone()[0]
+
+        return counts
+
+
+    def stats(self, connection=None, elapsed_sec=None) -> dict:
+        """Return per-fetchlog stats from staging + fetchlog row.
+
+        Must be called before staging tables are dropped or the
+        transaction is closed. All counts are scoped to this
+        client's fetchlogs_id.
+
+        Args:
+            connection: optional psycopg2 connection; defaults to client's own.
+            elapsed_sec: optional processing time to include in the result.
+
+        Returns:
+            dict with client counts, staging counts (added/matched/unmatched
+            for nodes, systems, sensors), reject count, fetchlog row status,
+            and (if provided) elapsed time.
+        """
+        conn = connection or self.get_connection(True)
+        result = {
+            "fetchlogs_id": self.fetchlogs_id,
+            "client_nodes": len(self.nodes),
+            "client_systems": len(self.systems),
+            "client_sensors": len(self.sensors),
+            "client_measurements": len(self.measurements),
+            "client_flags": len(self.flags),
+            "elapsed_sec": elapsed_sec,
+        }
+
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    COUNT(*) FILTER (WHERE is_new) AS added,
+                    COUNT(*) FILTER (WHERE NOT is_new
+                                     AND sensor_nodes_id IS NOT NULL) AS matched,
+                    COUNT(*) FILTER (WHERE sensor_nodes_id IS NULL) AS unmatched
+                FROM staging_sensornodes
+                WHERE fetchlogs_id = %s
+            """, (self.fetchlogs_id,))
+            row = cursor.fetchone()
+            result["nodes_added"] = row[0]
+            result["nodes_matched"] = row[1]
+            result["nodes_unmatched"] = row[2]
+
+            cursor.execute("""
+                SELECT
+                    COUNT(*) FILTER (WHERE is_new) AS added,
+                    COUNT(*) FILTER (WHERE NOT is_new
+                                     AND sensor_systems_id IS NOT NULL) AS matched,
+                    COUNT(*) FILTER (WHERE sensor_systems_id IS NULL) AS unmatched
+                FROM staging_sensorsystems
+                WHERE fetchlogs_id = %s
+            """, (self.fetchlogs_id,))
+            row = cursor.fetchone()
+            result["systems_added"] = row[0]
+            result["systems_matched"] = row[1]
+            result["systems_unmatched"] = row[2]
+
+            cursor.execute("""
+                SELECT
+                    COUNT(*) FILTER (WHERE is_new) AS added,
+                    COUNT(*) FILTER (WHERE NOT is_new
+                                     AND sensors_id IS NOT NULL) AS matched,
+                    COUNT(*) FILTER (WHERE sensors_id IS NULL) AS unmatched
+                FROM staging_sensors
+                WHERE fetchlogs_id = %s
+            """, (self.fetchlogs_id,))
+            row = cursor.fetchone()
+            result["sensors_added"] = row[0]
+            result["sensors_matched"] = row[1]
+            result["sensors_unmatched"] = row[2]
+
+            cursor.execute("""
+                SELECT COUNT(*), MIN(datetime), MAX(datetime)
+                FROM staging_measurements
+                WHERE fetchlogs_id = %s
+            """, (self.fetchlogs_id,))
+            row = cursor.fetchone()
+            result["measurements_staged"] = row[0]
+            result["measurement_date_range"] = (row[1], row[2])
+
+            cursor.execute(
+                "SELECT COUNT(*) FROM rejects WHERE fetchlogs_id = %s",
+                (self.fetchlogs_id,),
+            )
+            result["rejects"] = cursor.fetchone()[0]
+
+            cursor.execute("""
+                SELECT last_message, has_error, completed_datetime, loaded_datetime
+                FROM fetchlogs WHERE fetchlogs_id = %s
+            """, (self.fetchlogs_id,))
+            row = cursor.fetchone()
+            if row:
+                result["fetchlog_message"] = row[0]
+                result["fetchlog_has_error"] = row[1]
+                result["fetchlog_completed"] = row[2]
+                result["fetchlog_loaded"] = row[3]
+
+        return result
 
 #################################################################################################
 ############################## END OF IngestClient ##############################################

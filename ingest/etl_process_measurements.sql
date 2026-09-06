@@ -107,7 +107,7 @@ INSERT INTO sensor_nodes (
 SELECT source_name
 , source_name
 , source_id
-, jsonb_build_object('fetchlogs_id', MIN(fetchlogs_id))
+, jsonb_build_object('fetchlogs_id', MIN(fetchlogs_id), 'added-from', 'measurements')
 FROM staging_measurements
 WHERE sensors_id IS NULL
 GROUP BY 1,2,3
@@ -196,7 +196,7 @@ DELETE
 -------------------------------------------
 -- UPDATE MEASUREMENT UNITS BASED ON SENSOR
 -------------------------------------------
--- at this point everything should have a measurand id that is
+-- at this point everything should have a measurand id
 -- e.g. if the sensor is ppb and the measurement says ppm we need to transform it
 -- if the units are the same we do nothing
 -- if the measurement doesnt specify units we must assume they match the sensor

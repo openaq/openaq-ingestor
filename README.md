@@ -288,152 +288,135 @@ poetry run pytest tests/test_handler_integration.py::TestHandlerSNSEvents::test_
 
 ## Development Workflow
 
-### Using check.py - File checking CLI Utility
+### `cli.py` — unified ingest tool
 
-The `check.py` utility provides a command-line interface for loading and testing individual files from S3 or local filesystem.
+A single command-line tool for loading, checking, and downloading fetchlog files. Replaces the older `local.py`, `check.py`, and `test_ingest.py` scripts.
 
-#### Basic Usage
-
-```bash
-# Full load (staging + ETL to final tables)
-python check.py KEY
-
-# Preview mode - see what's in the file without loading to DB
-python check.py KEY --preview
-
-# Stage-only mode - load to staging tables, skip ETL
-python check.py KEY --stage-only
-
-# Dry run - full workflow with rollback
-python check.py KEY --dryrun
-```
-
-#### Download Option
-
-The `--download` flag downloads S3 files locally before processing, and can be combined with any mode:
+#### Basic usage
 
 ```bash
-# Download from S3 and do full load
-python check.py s3-key.json --download
-
-# Download and preview (no DB changes)
-python check.py s3-key.json --download --preview
-
-# Download and stage-only
-python check.py s3-key.json --download --stage-only
-
-# Download and dry run
-python check.py s3-key.json --download --dryrun
-
-# Download to specific location
-python check.py s3-key.json --download --output ~/my-files/
+./cli.py [SELECTOR] [ACTION] [OPTIONS]
 ```
 
-#### Examples with Local Test Files
+You must provide one key selector. By default the tool processes each key through the ingest client and rolls back — pass `--commit` to persist.
+
+#### Selecting keys
+
+| Flag | Purpose |
+|---|---|
+| `--id ID` | single fetchlog id |
+| `--batch UUID` | all keys in a batch |
+| `--pattern REGEX` | query fetchlogs by PostgreSQL regex |
+| `--s3-prefix PREFIX` | list S3 directly under a prefix |
+| `--from-file PATH` | read keys from a file (one per line, `#` for comments) |
+| `KEY [KEY ...]` | positional S3 keys or local paths |
+
+Selectors are mutually exclusive. Positional keys are upserted into `fetchlogs` on the target DB.
+
+#### Actions
+
+Exactly one of these determines what happens to each key:
+
+| Flag | Behavior |
+|---|---|
+| *(default)* | parse, dump to staging, run ETL, report |
+| `--preview` | parse only; no DB writes at all |
+| `--dry-run` | resolve keys and print them; no processing |
+| `--download [PATH]` | download files locally; no DB interaction |
+
+#### Modifiers
+
+| Flag | Purpose |
+|---|---|
+| `--stage-only` | dump to staging tables, skip the ETL load step |
+| `--keep-staging` | use permanent staging tables (overrides `USE_TEMP_TABLES`) so you can inspect state after a run |
+| `--source-db DSN` | alternate DB connection string for fetchlog lookups (e.g. query production, load into dev) |
+| `--bucket NAME` | override `FETCH_BUCKET` |
+| `--limit N` | cap on keys processed (default 300) |
+
+#### Reporting
+
+| Flag | Purpose |
+|---|---|
+| *(default)* | prints a per-key summary table with matched/added counts |
+| `--no-report` | suppress the summary table |
+| `--csv PATH` | write per-key stats to CSV |
+| `--diagnose QUERY[,QUERY,...]` | run named diagnostic queries; use `list` to see available names, `all` to run every one |
+| `--diagnose-dir DIR` | write diagnostic query results to CSV files in this directory |
+
+Diagnostic queries run inside the same transaction as the ingest, so they see uncommitted staging data even without `--keep-staging`.
+
+#### Transaction control
+
+| Flag | Purpose |
+|---|---|
+| *(default)* | rollback all changes |
+| `--commit` | persist changes to the target DB |
+
+#### Examples
 
 ```bash
-# Preview test file contents
-python check.py tests/testdata_lcs_clarity.json --preview
+# Look at a file's parsed contents without touching the DB
+./cli.py --key measures/2024-03/foo.json.gz --preview
 
-# Load test file with full ETL processing
-python check.py tests/testdata_lcs_clarity.json
+# See which keys a pattern resolves to, don't process
+./cli.py --pattern 'measures/2024-03/.*' --dry-run --limit 50
 
-# Dry run - test the full workflow and rollback
-python check.py tests/testdata_lcs_clarity.json --dryrun
+# Download a production file for local inspection
+./cli.py --key measures/2024-03/foo.json.gz --download ~/inspect/
 
-# Load to staging only (useful for debugging ETL separately)
-python check.py tests/testdata_lcs_clarity.json --stage-only
+# Load a batch into dev with rollback (default) and full report
+./cli.py --batch abc-123
+
+# Same, but persist
+./cli.py --batch abc-123 --commit
+
+# Stage-only load with CSV report
+./cli.py --from-file keys.txt --stage-only --csv report.csv
+
+# Cross-DB: query prod fetchlogs, load into local dev
+./cli.py --pattern 'measures/2024.*' \
+    --source-db postgresql://user@prod-host/openaq \
+    --commit
+
+# Debug a matching issue with diagnostic queries
+./cli.py --key measures/foo.json.gz \
+    --diagnose new-nodes-with-nearby,rejects \
+    --diagnose-dir ./diag/
+
+# Full inspection: keep staging around, run all diagnostics
+./cli.py --key measures/foo.json.gz \
+    --keep-staging --diagnose all --diagnose-dir ./diag/
 ```
 
-#### Examples with S3 Files
+#### Two-step "look then commit" workflow
+
+Because rollback is the default, a common pattern is:
 
 ```bash
-# Preview S3 file without loading to DB (reads directly from S3)
-python check.py lcs-etl-pipeline/measures/airgradient/2025-02-14/data.json --preview
+# First run: inspect what would happen
+./cli.py --key foo --diagnose summary
 
-# Download S3 file and do full load
-python check.py lcs-etl-pipeline/measures/airgradient/2025-02-14/data.json --download
-
-# Download and preview only (saves file locally, no DB changes)
-python check.py lcs-etl-pipeline/measures/clarity/2025-02-14/data.json --download --preview
-
-# Full load from S3 to database (without downloading)
-python check.py lcs-etl-pipeline/measures/clarity/2025-02-14/measurements.json
-
-# Dry run from S3 (safe testing with rollback)
-python check.py lcs-etl-pipeline/measures/purpleair/2025-02-14/data.ndjson --dryrun
-
-# Download and dry run (saves locally + tests load with rollback)
-python check.py lcs-etl-pipeline/measures/purpleair/2025-02-14/data.ndjson --download --dryrun
-
-# Load with specific fetchlogs ID
-python check.py lcs-etl-pipeline/measures/clarity/data.json --fetchlogs-id 12345
+# Second run: same command with --commit
+./cli.py --key foo --diagnose summary --commit
 ```
 
-#### Options
+#### Available diagnostic queries
+
+Run `./cli.py --diagnose list` to see the full list. Queries are grouped into packs for convenience:
+
+- **`summary`** — quick health check (staged counts, sources, units, rejects)
+- **`matching`** — node matching analysis (unmatched, nearby existing, cross-provider)
+- **`rejects`** — reject breakdown by cause
+- **`units`** — sensor/measurement unit reconciliation
+- **`quality`** — flagged values, suspicious timestamps, stuck sensors
+- **`spatial`** — geographic proximity and collision detection
+
+Use pack names anywhere a query name is expected:
 
 ```bash
-# Use specific environment file
-python check.py data.json --env .env.staging
-
-# Use AWS profile
-python check.py s3-key.json --profile dev-aws
-
-# Enable debug logging
-python check.py data.json --debug
-
-# Don't use temp tables (useful for inspecting staging data)
-python check.py data.json --keep --stage-only
-
-# Combine options (download + dry run + custom output location)
-python check.py s3-key.json --download --dryrun --output ~/Downloads/ --profile production
+./cli.py --key foo --diagnose matching,rejects
 ```
-
-#### Output
-
-The utility provides detailed summaries at each step:
-
-- **Client Summary**: Nodes, systems, sensors, measurements loaded into memory
-- **Staging Summary**: Counts and date ranges in staging tables
-- **Current Data Summary**: Final table counts after ETL processing (full load mode only)
-
-### Using local.py - File Loading CLI Utility
-
-A CLI utility for manually loading files into the database from S3, useful for debugging and reprocessing.
-
-#### Usage
-
-```bash
-# Load a single file by fetchlog ID
-poetry run python local.py --id 12345
-
-# Load a single file by S3 key
-poetry run python local.py --key "s3://bucket/path/to/file.json"
-
-# Load a batch of files by batch UUID
-poetry run python local.py --batch "some-batch-uuid"
-
-# Enable debug logging with any mode
-poetry run python local.py --debug --id 12345
-
-# Load files from a bucket directly to the db
-poetry run python local.py --bucket=openaq-testing-bucket --prefix=test-files
-
-```
-
-#### Options
-
-| Flag | Description |
-|------|-------------|
-| `--id` | Fetchlog ID of the file to load |
-| `--key` | S3 key/pattern of the file to load |
-| `--batch` | Batch UUID to load (up to 100 files) |
-| `--bucket` | Load files directly from a bucket
-| `--prefix` | Specify the prefix to use when loading from bucket
-| `--limit` | Limit the number of files loaded
-| `--debug` | Enable debug-level logging |
-
-You must provide exactly one of `--id`, `--key`, or `--batch`.
 
 
 ### Processing a Test File with Python API

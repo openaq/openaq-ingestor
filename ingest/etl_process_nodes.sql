@@ -1,4 +1,4 @@
--- lcs_ingest_full
+-- etl_process_nodes.sql
 DO $$
 DECLARE
 __process_start timestamptz := clock_timestamp();
@@ -34,32 +34,59 @@ SET units  = 'µg/m³'
 WHERE units IN ('µg/m��','��g/m³', 'ug/m3');
 
 
-
 -- now update them using the source + spatial method
 UPDATE staging_sensornodes
 SET sensor_nodes_id = s.sensor_nodes_id
 , timezones_id = s.timezones_id
 , countries_id = s.countries_id
 , is_new = false
-, is_moved = st_astext(s.geom) != st_astext(staging_sensornodes.geom)
+--, is_moved = st_astext(s.geom) != st_astext(staging_sensornodes.geom)
 FROM sensor_nodes s
 JOIN providers p ON (s.providers_id = p.providers_id)
 WHERE s.source_name = staging_sensornodes.source_name
-AND s.source_id = staging_sensornodes.source_id
-AND st_distance(staging_sensornodes.geom, s.geom) < p.spatial_match_tolerance
-  ;
-
+AND st_distance(staging_sensornodes.geom, s.geom) < 0.0001 --p.spatial_match_tolerance
+AND (
+  staging_sensornodes.source_id IS NULL
+  OR s.source_id IS NULL
+  OR s.source_id = s.sensor_nodes_id::text
+  OR s.source_id = staging_sensornodes.source_id
+  )
+;
 
 -- only update the nodes where the geom has changed
--- the geom queries are really slow so we dont want to be doing that all the time
+-- the per row geom queries are really slow so we dont want to be doing that all the time
 -- ~18 locations per second
-UPDATE staging_sensornodes SET
-  timezones_id = get_timezones_id(geom)
-, countries_id = get_countries_id(geom)
-WHERE is_new
-  OR is_moved
-  OR timezones_id IS NULL
-  OR countries_id IS NULL;
+-- UPDATE staging_sensornodes SET
+--   timezones_id = get_timezones_id(geom)
+-- , countries_id = get_countries_id(geom)
+-- WHERE geom IS NOT NULL AND (
+--     is_new --OR is_moved
+--     OR timezones_id IS NULL
+--     OR countries_id IS NULL
+--   );
+
+-- Update timezones_id via spatial join
+UPDATE staging_sensornodes s
+SET timezones_id = t.timezones_id
+FROM timezones t
+WHERE ST_Intersects(s.geom, t.geog::geometry)
+  AND s.geom IS NOT NULL
+  AND (
+    s.is_new
+    OR s.timezones_id IS NULL
+  );
+
+-- Update countries_id via spatial join
+UPDATE staging_sensornodes s
+SET countries_id = c.countries_id
+FROM countries c
+WHERE ST_Intersects(s.geom, c.geog::geometry)
+  AND s.geom IS NOT NULL
+  AND (
+    s.is_new
+    OR s.countries_id IS NULL
+  );
+
 
 
 -- Update the matched nodes if anything has changed
@@ -191,12 +218,15 @@ FROM staging_sensornodes
 WHERE staging_sensorsystems.ingest_sensor_nodes_id = staging_sensornodes.ingest_id;
 
 -- And match to any existing sensor systems
+-- a null source_id or a source_id that is the same as the sensor_systems_id is considered a generic system
 UPDATE staging_sensorsystems
 SET sensor_systems_id = sensor_systems.sensor_systems_id
 , is_new = false
 FROM sensor_systems
 WHERE sensor_systems.sensor_nodes_id = staging_sensorsystems.sensor_nodes_id
-AND sensor_systems.source_id = staging_sensorsystems.ingest_id;
+AND (sensor_systems.source_id = staging_sensorsystems.ingest_id
+  OR sensor_systems.source_id IS NULL
+  OR sensor_systems.source_id = sensor_systems.sensor_systems_id::text);
 
 
 -- log anything we were not able to get an id for
@@ -212,7 +242,22 @@ RETURNING 1)
 SELECT COUNT(1) INTO __rejected_systems
 FROM r;
 
+
+UPDATE sensor_systems p
+  SET source_id = s.ingest_id
+  , instruments_id = i.instruments_id
+  , modified_on = now()
+  FROM staging_sensorsystems s
+  LEFT JOIN instruments i ON (s.instrument_ingest_id = i.ingest_id)
+  WHERE p.sensor_systems_id = s.sensor_systems_id
+  AND (
+    (p.source_id IS NULL AND s.ingest_id IS NOT NULL OR p.source_id != s.ingest_id)
+    OR
+    (p.instruments_id IS NULL AND i.instruments_id IS NOT NULL OR p.instruments_id != i.instruments_id)
+  );
+
 -- And finally we add/update the sensor systems
+--- FIX ME -- split up the add and update part of this
 INSERT INTO sensor_systems (sensor_nodes_id, source_id, instruments_id, metadata)
 SELECT sensor_nodes_id
 , s.ingest_id
@@ -221,14 +266,17 @@ SELECT sensor_nodes_id
 FROM staging_sensorsystems s
 LEFT JOIN instruments i ON (s.instrument_ingest_id = i.ingest_id)
 WHERE sensor_nodes_id IS NOT NULL
+  AND sensor_systems_id IS NULL
 GROUP BY sensor_nodes_id, s.ingest_id, instruments_id, metadata
-ON CONFLICT (sensor_nodes_id, source_id) DO UPDATE SET
-    metadata=COALESCE(sensor_systems.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}')
-    , instruments_id = EXCLUDED.instruments_id
-    , modified_on = clock_timestamp()
-WHERE (COALESCE(sensor_systems.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}'))
-        IS DISTINCT FROM sensor_systems.metadata
-   OR EXCLUDED.instruments_id IS DISTINCT FROM sensor_systems.instruments_id;
+  ON CONFLICT DO NOTHING;
+
+-- ON CONFLICT (sensor_nodes_id, source_id) DO UPDATE SET
+--     metadata=COALESCE(sensor_systems.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}')
+--     , instruments_id = EXCLUDED.instruments_id
+--     , modified_on = clock_timestamp()
+-- WHERE (COALESCE(sensor_systems.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}'))
+--         IS DISTINCT FROM sensor_systems.metadata
+--    OR EXCLUDED.instruments_id IS DISTINCT FROM sensor_systems.instruments_id;
 
 ----------------------------
 -- lcs_ingest_sensors.sql --
@@ -239,9 +287,8 @@ UPDATE staging_sensorsystems
 SET sensor_systems_id = sensor_systems.sensor_systems_id
 FROM sensor_systems
 WHERE staging_sensorsystems.sensor_systems_id IS NULL
-AND staging_sensorsystems.sensor_nodes_id=sensor_systems.sensor_nodes_id
-AND staging_sensorsystems.ingest_id=sensor_systems.source_id
-;
+AND staging_sensorsystems.sensor_nodes_id = sensor_systems.sensor_nodes_id
+AND staging_sensorsystems.ingest_id=sensor_systems.source_id;
 
 WITH r AS (
 INSERT INTO rejects (t, tbl,r,fetchlogs_id)
@@ -281,17 +328,39 @@ SELECT COUNT(1) INTO __rejected_sensors
 FROM r;
 
 
+--- Start with the old way to fix an LCS import issues
+-- this is to deal with the fact that the old lcs import data does not include units
 UPDATE staging_sensors
-SET sensors_id = sensors.sensors_id
-FROM sensors
-WHERE sensors.sensor_systems_id=staging_sensors.sensor_systems_id
-AND sensors.source_id = staging_sensors.ingest_id;
+  SET measurands_id = lcs.measurands_id
+  , units = lcs.units
+  FROM (SELECT s.ingest_id
+  , m.measurands_id
+  , m2.units
+  FROM staging_sensors s
+  JOIN staging_sensorsystems y ON (s.ingest_sensor_systems_id = y.ingest_id)
+  JOIN staging_sensornodes n ON (y.ingest_sensor_nodes_id = n.ingest_id)
+  JOIN measurands_map m ON (n.source_name = m.source_name AND s.measurand = m.key) -- Source -> Measurands
+  JOIN measurands m2 ON (m.measurands_id = m2.measurands_id)
+  ) as lcs
+  WHERE lcs.ingest_id = staging_sensors.ingest_id
+  AND staging_sensors.units IS NULL;
 
 
+-- Then apply the new way
 UPDATE staging_sensors
 SET measurands_id = m.measurands_id
 FROM (SELECT key,  measurands_id FROM measurands_map_view) as m
-WHERE staging_sensors.measurand=m.key;
+WHERE staging_sensors.measurand=m.key
+  AND staging_sensors.measurands_id IS NULL;
+
+
+UPDATE staging_sensors s
+SET sensors_id = p.sensors_id
+FROM sensors p
+WHERE p.sensor_systems_id = s.sensor_systems_id
+AND (p.source_id = s.ingest_id
+  OR (p.source_id IS NULL AND p.measurands_id = s.measurands_id)
+   OR (p.source_id = p.sensors_id::text AND p.measurands_id = s.measurands_id));
 
 
 WITH r AS (
@@ -306,6 +375,7 @@ WHERE measurands_id IS NULL
 RETURNING 1)
 SELECT COUNT(1) INTO __rejected_measurands
 FROM r;
+
 
 WITH inserts AS (
 INSERT INTO sensors (
@@ -327,6 +397,7 @@ FROM staging_sensors s
 LEFT JOIN sensor_statuses ss ON (ss.short_code = s.status)
 WHERE measurands_id is not null
 AND sensor_systems_id is not null
+AND sensors_id IS NULL
 GROUP BY ingest_id
 , sensor_systems_id
 , measurands_id
@@ -334,31 +405,45 @@ GROUP BY ingest_id
 , averaging_interval_seconds
 , ss.sensor_statuses_id
 , metadata
-ON CONFLICT (sensor_systems_id, measurands_id, source_id) DO UPDATE
- SET metadata = COALESCE(sensors.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}')
-  -- in a situation where we have limited data updating an existing record
-  -- we need to be careful we dont overwrite anything
-  , data_logging_period_seconds = COALESCE(EXCLUDED.data_logging_period_seconds, sensors.data_logging_period_seconds)
-  , data_averaging_period_seconds = COALESCE(EXCLUDED.data_averaging_period_seconds, sensors.data_averaging_period_seconds)
-  , sensor_statuses_id = COALESCE(EXCLUDED.sensor_statuses_id, sensors.sensor_statuses_id)
-  , modified_on = clock_timestamp()
- WHERE COALESCE(EXCLUDED.data_logging_period_seconds, sensors.data_logging_period_seconds)
-         IS DISTINCT FROM sensors.data_logging_period_seconds
-    OR COALESCE(EXCLUDED.data_averaging_period_seconds, sensors.data_averaging_period_seconds)
-         IS DISTINCT FROM sensors.data_averaging_period_seconds
-    OR COALESCE(EXCLUDED.sensor_statuses_id, sensors.sensor_statuses_id)
-         IS DISTINCT FROM sensors.sensor_statuses_id
-    --OR (COALESCE(sensors.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}'))
-    --     IS DISTINCT FROM sensors.metadata
+--ON CONFLICT DO NOTHING
+-- ON CONFLICT (sensor_systems_id, measurands_id, source_id) DO UPDATE
+--  SET metadata = COALESCE(sensors.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}')
+--   -- in a situation where we have limited data updating an existing record we need to be careful we dont overwrite anything
+--   , data_logging_period_seconds = COALESCE(EXCLUDED.data_logging_period_seconds, sensors.data_logging_period_seconds)
+--   , data_averaging_period_seconds = COALESCE(EXCLUDED.data_averaging_period_seconds, sensors.data_averaging_period_seconds)
+--   , sensor_statuses_id = COALESCE(EXCLUDED.sensor_statuses_id, sensors.sensor_statuses_id)
+--   , modified_on = clock_timestamp()
+--  WHERE COALESCE(EXCLUDED.data_logging_period_seconds, sensors.data_logging_period_seconds)
+--          IS DISTINCT FROM sensors.data_logging_period_seconds
+--     OR COALESCE(EXCLUDED.data_averaging_period_seconds, sensors.data_averaging_period_seconds)
+--          IS DISTINCT FROM sensors.data_averaging_period_seconds
+--     OR COALESCE(EXCLUDED.sensor_statuses_id, sensors.sensor_statuses_id)
+--          IS DISTINCT FROM sensors.sensor_statuses_id
+--     --OR (COALESCE(sensors.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}'))
+--     --     IS DISTINCT FROM sensors.metadata
     RETURNING 1)
 SELECT COUNT(1) INTO __inserted_sensors
 FROM inserts;
 
+
+  --- Update any that need to be updated
+  UPDATE sensors
+  SET source_id = s.ingest_id
+  FROM staging_sensors s
+  WHERE sensors.sensors_id = s.sensors_id
+  AND (
+    sensors.source_id IS NULL
+    OR sensors.source_id = sensors.sensors_id::text
+  );
+
+  -- update with the new ones
 UPDATE staging_sensors
 SET sensors_id = sensors.sensors_id
 FROM sensors
-WHERE sensors.sensor_systems_id=staging_sensors.sensor_systems_id
-AND sensors.source_id = staging_sensors.ingest_id;
+WHERE staging_sensors.sensors_id IS NULL
+  AND sensors.sensor_systems_id = staging_sensors.sensor_systems_id
+  AND sensors.source_id = staging_sensors.ingest_id;
+
 
 WITH r AS (
 INSERT INTO rejects (t,tbl,r,fetchlogs_id)
