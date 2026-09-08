@@ -30,7 +30,7 @@ class TestIngestClientIntegration:
         """Test that realtime data shape is added with the right measurand and converted."""
         # Arrange
         client = IngestClient(resources=ingest_resources)
-        content = """{"date": {  "utc": "2024-04-08T21:25:00.000Z",  "local": "2024-04-09T00:25:00+03:00"},"parameter": "no","value": 0.002, "unit": "ppm","averagingPeriod": {  "unit": "hours",  "value": 0.25},"location": "station1","city": "portland, OR","country": "US","coordinates": {  "latitude": 42.8011974,  "longitude": -122.99144547},"attribution": [  { "name": "Station #1", "url": "https://fake-stations.gov"  }],"sourceName": "testing","sourceType": "government","mobile": false }"""
+        content = """{"date": {  "utc": "2024-04-08T21:25:00.000Z",  "local": "2024-04-09T00:25:00+03:00"},"parameter": "no","value": 0.002, "unit": "ppm","averagingPeriod": {  "unit": "hours",  "value": 0.25},"location": "Station #1","id":"station1","city": "portland, OR","country": "US","coordinates": {  "latitude": 42.8011974,  "longitude": -122.99144547},"attribution": [  { "name": "Station #1", "url": "https://fake-stations.gov"  }],"sourceName": "testing","sourceType": "government","mobile": false }"""
         test_file = make_test_file("realtime_bad_param.ndjson", content)
         client.load_key(test_file, sample_fetchlog, str(date.today()))
 
@@ -96,7 +96,7 @@ class TestIngestClientIntegration:
 
 
         client = IngestClient(resources=ingest_resources)
-        content = """{"date": {  "utc": "2024-04-08T21:25:00.000Z",  "local": "2024-04-09T00:25:00+03:00"},"parameter": "no","value": 0.002,"unit": "ppm","averagingPeriod": {  "unit": "hours",  "value": 0.25},"location": "station1","city": "portland, OR","country": "US","coordinates": {  "latitude": 42.8011974,  "longitude": -122.99144547},"attribution": [  { "name": "Station #1", "url": "https://fake-stations.gov"  }],"sourceName": "testing","sourceType": "government","mobile": false }"""
+        content = """{"date": {  "utc": "2024-04-08T21:25:00.000Z","local": "2024-04-09T00:25:00+03:00"},"parameter": "no","value": 0.002,"unit": "ppm","averagingPeriod": {  "unit": "hours","value": 0.25},"location": "Station #1","id":"station1","city": "portland, OR","country": "US","coordinates": {  "latitude": 42.8011974,  "longitude": -122.99144547},"attribution": [  { "name": "fake-stations", "url": "https://fake-stations.gov"  }],"sourceName": "testing","sourceType": "government","mobile": false }"""
         test_file = make_test_file("realtime_bad_param.ndjson", content)
         client.load_key(test_file, sample_fetchlog, str(date.today()))
 
@@ -106,7 +106,6 @@ class TestIngestClientIntegration:
         assert len(client.sensors) == 1, "Sensor was not added"
         assert client.measurements[0][5] == 0.002 ## not converted yet
 
-        dump(get_object("systems"))
         client.dump(load=True)
 
         # Verify node data integrity
@@ -115,6 +114,9 @@ class TestIngestClientIntegration:
         staged_systems = get_object("staged_systems")
         staged_sensors = get_object("staged_sensors")
         staged_measurements = get_object("staged_measurements")
+
+        dump(get_object('new-nodes-with-nearby', fetchlogs_id= sample_fetchlog))
+
 
         assert len(staged_nodes) == 1
         assert len(staged_systems) == 1

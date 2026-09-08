@@ -44,7 +44,7 @@ SET sensor_nodes_id = s.sensor_nodes_id
 FROM sensor_nodes s
 JOIN providers p ON (s.providers_id = p.providers_id)
 WHERE s.source_name = staging_sensornodes.source_name
-AND st_distance(staging_sensornodes.geom, s.geom) < 0.0001 --p.spatial_match_tolerance
+AND st_distance(staging_sensornodes.geom, s.geom) <= p.spatial_match_tolerance
 AND (
   staging_sensornodes.source_id IS NULL
   OR s.source_id IS NULL

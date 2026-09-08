@@ -51,6 +51,22 @@ INTO __total_measurements
 , __end_datetime
 FROM staging_measurements;
 
+-- Use the process staged sensors to match measurements
+-- this should deal with the issue where a source_id could change
+-- which could happen with the legacy sources
+UPDATE staging_measurements
+ SET sensors_id = s.sensors_id
+ , measurands_id = s.measurands_id
+ , sensor_averaging_interval = make_interval(secs => p.data_averaging_period_seconds + 1)
+ , datetime_from = datetime - make_interval(secs => p.data_averaging_period_seconds)
+ , units_id = m.units_id
+ , note = 'staged-sensors-sensor-id-match'
+FROM staging_sensors s
+JOIN sensors p ON (s.sensors_id = p.sensors_id)
+JOIN measurands m ON (p.measurands_id = m.measurands_id)
+WHERE s.ingest_id=staging_measurements.ingest_id;
+
+
 ----------------------------
 -- INIITAL SENSOR ID MATCH
 ----------------------------
@@ -58,7 +74,7 @@ FROM staging_measurements;
 -- that duplicate sensors with the same ingest/source id are created
 	-- this is a short term fix
 	-- a long term fix would not allow duplicate source_id's
-WITH staged_sensors AS (
+WITH distinct_measurement_sensors AS (
   -- this first part significantly speeds it up on slow machines
   SELECT DISTINCT ingest_id
   FROM staging_measurements
@@ -69,7 +85,8 @@ WITH staged_sensors AS (
   , s.data_averaging_period_seconds
 	, RANK() OVER (PARTITION BY s.source_id ORDER BY added_on ASC) as rnk
 	FROM sensors s
-	JOIN staged_sensors m ON (s.source_id = m.ingest_id)
+	JOIN distinct_measurement_sensors m ON (s.source_id = m.ingest_id)
+	--JOIN staged_sensors m ON (s.sensors_id = m.sensors_id)
 ), active_sensors AS (
 	SELECT source_id
 	, sensors_id
@@ -88,7 +105,8 @@ WITH staged_sensors AS (
   , note = 'initial-sensor-id-match'
 	FROM active_sensors s
   JOIN measurands m USING (measurands_id)
-	WHERE s.source_id=ingest_id;
+	WHERE s.source_id=ingest_id
+  AND staging_measurements.sensors_id IS NULL;
 
 
 -----------------------------------------------

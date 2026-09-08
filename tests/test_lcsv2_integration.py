@@ -5,6 +5,7 @@ from unittest.mock import patch
 from ingest.lcsV2 import IngestClient
 
 from tests.conftest import get_test_path
+from tests._debug import dump
 
 dataV2 = """
 {
@@ -76,9 +77,8 @@ class TestIngestClientIntegration:
             assert node[2] is not None, "source_id should not be NULL"
 
         # Assert - Check staging_measurements
-        print(test_file)
         rejects = get_object("rejects", fetchlogs_id = sample_fetchlog)
-        print(rejects)
+
         staged_measurements = get_object("staged_measurements")
         measurement_count = len(staged_measurements)
         assert measurement_count == 2, f"Expected 2 measurements, got {measurement_count}"
@@ -94,7 +94,7 @@ class TestIngestClientIntegration:
         """Test realtime measures data insertion."""
         # Arrange
         client = IngestClient(resources=ingest_resources)
-        content = """{"date": {  "utc": "2024-04-08T21:25:00.000Z",  "local": "2024-04-09T00:25:00+03:00"},"parameter": "no","value": 0.0002, "unit": "xxx","averagingPeriod": {  "unit": "hours",  "value": 0.25},"location": "station1","city": "portland, OR","country": "US","coordinates": {  "latitude": 42.8011974,  "longitude": -122.99144547},"attribution": [  { "name": "Fake portland location", "url": "https://fake-portland.gov"  }],"sourceName": "testing","sourceType": "government","mobile": false }\n{"date": {  "utc": "2024-04-08T21:25:00.000Z",  "local": "2024-04-09T00:25:00+03:00"},"parameter": "pm10","value": 0.0002, "unit": "ug/m3","averagingPeriod": {  "unit": "hours",  "value": 0.25},"location": "station1","city": "portland, OR","country": "US","coordinates": {  "latitude": 42.8011974,  "longitude": -122.99144547},"attribution": [  { "name": "Fake portland location", "url": "https://fake-portland.gov"  }],"sourceName": "testing","sourceType": "government","mobile": false }"""
+        content = """{"date": {  "utc": "2024-04-08T21:25:00.000Z",  "local": "2024-04-09T00:25:00+03:00"},"parameter": "no","value": 0.0002, "unit": "xxx","averagingPeriod": {  "unit": "hours",  "value": 0.25},"location": "Fake portland location","city": "portland, OR","country": "US","coordinates": {  "latitude": 42.8011974,  "longitude": -122.99144547},"attribution": [  { "name": "fake-provider", "url": "https://fake-portland.gov"  }],"sourceName": "testing","sourceType": "government","mobile": false }\n{"date": {  "utc": "2024-04-08T21:25:00.000Z",  "local": "2024-04-09T00:25:00+03:00"},"parameter": "pm10","value": 0.0002, "unit": "ug/m3","averagingPeriod": {  "unit": "hours",  "value": 0.25},"location": "station1","city": "portland, OR","country": "US","coordinates": {  "latitude": 42.8011974,  "longitude": -122.99144547},"attribution": [  { "name": "Fake portland location", "url": "https://fake-portland.gov"  }],"sourceName": "testing","sourceType": "government","mobile": false }"""
         test_file = make_test_file('testdata_realtime_measures.ndjson', content)
 
         # Act
@@ -102,6 +102,8 @@ class TestIngestClientIntegration:
         client.dump(load=True)
 
         rejects = get_object("rejects", fetchlogs_id=sample_fetchlog)
+
+        dump(rejects)
 
         # Assert - Realtime data should only have measurements, no nodes
         nodes = get_object("staged_sensor_nodes")
@@ -112,16 +114,16 @@ class TestIngestClientIntegration:
         sensors_count = len(sensors)
         assert sensors_count == 2, f"Realtime data creates 2 sensors, got {sensors_count}"
 
-        # one of the measurements should not load due to bad units
-        assert len(rejects) == 1, f"Expected 1 reject, got {len(rejects)}"
-        assert 'meas-no-unit-conversion' in [r['tbl'] for r in rejects]
-
         # Verify measurement data
         measurements = get_object("staged_measurements")
         assert len(measurements) == 1, f"Realtime data creates 1 measure, got {len(measurements)}"
         for meas in measurements:
             assert meas['fetchlogs_id'] == sample_fetchlog, "Measurement has wrong fetchlogs_id"
             assert meas['value'] is not None, "Measurement value should not be NULL"
+
+        # one of the measurements should not load due to bad units
+        assert len(rejects) == 1, f"Expected 1 reject, got {len(rejects)}"
+        assert 'meas-no-unit-conversion' in [r['tbl'] for r in rejects]
 
 
     def test_ingest_clarity_data_to_staging(

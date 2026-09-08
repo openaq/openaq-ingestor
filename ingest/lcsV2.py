@@ -176,6 +176,9 @@ class IngestClient:
         self.measurement_map = {
             "sensor_id": {"col": "ingest_id"},
             "ingest_id": {},
+            "source_name": {},
+            "source_id": {},
+            "measurand": {},
             "parameter": {"col": "ingest_id", "func": to_sensorid },
             "timestamp": {"col": "datetime", "func": to_timestamp },
             "datetime": {"col": "datetime", "func": to_timestamp },
@@ -469,18 +472,20 @@ class IngestClient:
                             logger.debug('Missing coordinates')
                             continue
                         geo = geohash.encode(coords.get('latitude'), coords.get('longitude'), 9)
-                        ingest_id = f"{nd.get('sourceName')}-{geo}"
+                        source_id = nd.get("id", geo)
+                        source_name = nd.get("sourceName")
+                        ingest_id = f"{source_name}-{source_id}"
                         #ingest_id = f"{nd.get('sourceName')}"
                         sensor_ingest_id = f"{ingest_id}-{nd.get('parameter')}"
                         interval_seconds = to_seconds('averagingPeriod', nd)
                         units = nd.get("unit", "")
-                        parameter = f"{nd.get("parameter", "")}{units}"
+                        parameter = f"{nd.get("parameter", "")}"
                         if ingest_id not in self.nodes:
                             attributes = nd.get('attribution', [{}])[0]
                             self.add_node({
                                 "ingestMatchingMethod": "source-spatial",
-                                "source_name": nd.get("sourceName"),
-                                "source_id": geo,
+                                "source_name": source_name,
+                                "source_id": source_id,
                                 "site_name": nd.get("location"),#attributes.get("name"),
                                 "coordinates": coords,
                                 "ismobile": nd.get("mobile"),
@@ -490,7 +495,7 @@ class IngestClient:
                                     "sensors": [{
                                         "key": sensor_ingest_id,
                                         "units": units,
-                                        "parameter": parameter,
+                                        "parameter": f"{parameter}",
                                         "interval_seconds": interval_seconds
                                     }]
                                 }]
@@ -508,8 +513,10 @@ class IngestClient:
                         ## all measurements should be added
                         self.add_measurement({
                             "ingest_id": sensor_ingest_id,
+                            "source_name": source_name,
+                            "source_id": source_id,
                             "date": nd.get("date"),
-                            "parameter": parameter,
+                            "measurand": parameter,
                             "unit": units,
                             "value": nd.get("value"),
                             "averagingPeriod": nd.get("averagingPeriod"),
@@ -819,6 +826,10 @@ class IngestClient:
         lat = None
         lon = None
         units = None
+        source_name = None
+        source_id = None
+        measurand = None
+
         # csv method
         if isinstance(m, list):
             if len(m) < 3:
@@ -846,7 +857,11 @@ class IngestClient:
             ingest_id = meas.get('ingest_id')
             datetime = meas.get('datetime')
             value = meas.get('value')
+            measurand = meas.get('measurand')
             units = meas.get('units')
+            source_name = meas.get('source_name')
+            source_id = meas.get('source_id')
+
             if units is None:
                 ## if the data is new and the sensor exists
                 ## not sure its worth doing this, lets revisit after the etl updates
@@ -858,19 +873,29 @@ class IngestClient:
 
             self.add_flags(m.get('flags', []), ingest_id, fetchlogs_id, datetime)
 
-        # parse the ingest id here
         if ingest_id is None:
             raise Exception(f"Could not find ingest id in {meas}")
 
-        ingest_arr = ingest_id.split('-')
-        if len(ingest_arr) < 3:
-            logger.warning(f'Not enough information in ingest-id: `{ingest_id}`')
-            return
+        # parse the ingest id here only if we need it
+        if None in [source_name, source_id, measurand]:
+            ingest_arr = ingest_id.split('-')
+            if source_name is None:
+                source_name = ingest_arr[0]
 
-        elif len(ingest_arr) >= 3:
-            source_name = ingest_arr[0]
-            source_id = '-'.join(ingest_arr[1:len(ingest_arr)-1])
-            measurand = ingest_arr[-1]
+            if len(ingest_arr) < 3:
+                logger.warning(f'Not enough information in ingest-id: `{ingest_id}`')
+                return
+
+            elif len(ingest_arr) == 3:
+                source_name = ingest_arr[0]
+                source_id = '-'.join(ingest_arr[1:len(ingest_arr)-1])
+                measurand = ingest_arr[-1]
+
+            elif len(ingest_arr) > 3:
+                logger.info(f"{source_name}/{measurand}/{source_id}/{ingest_arr}")
+                source_name = ingest_arr[0]
+                source_id = '-'.join(ingest_arr[1:len(ingest_arr)-1])
+                measurand = ingest_arr[-1]
 
         if not None in [ingest_id, datetime, source_name, source_id, measurand]:
             ## this is to solve a realtime issue

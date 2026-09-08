@@ -12,6 +12,7 @@ import json
 from psycopg2.extras import RealDictCursor
 from ingest.settings import settings
 from ingest.resources import Resources
+from ingest.diagnostics import QUERIES as DIAGNOSTIC_QUERIES
 
 logging.getLogger('boto3').setLevel(logging.WARNING)
 logging.getLogger('botocore').setLevel(logging.WARNING)
@@ -29,6 +30,12 @@ def pytest_addoption(parser):
 def pytest_configure(config):
     if config.getoption("--persist-db"):
         print("\n⚠️  --persist-db active: DB changes will be COMMITTED\n")
+
+
+def get_test_path(relpath: str) -> str:
+    """Absolute path to a file in the tests/ directory."""
+    return os.path.join(os.path.dirname(__file__), relpath)
+
 
 @pytest.fixture(scope="function")
 def persist_db(request):
@@ -494,11 +501,6 @@ def create_node(ingest_resources):
     return _factory
 
 
-def get_test_path(relpath: str) -> str:
-    """Absolute path to a file in the tests/ directory."""
-    return os.path.join(os.path.dirname(__file__), relpath)
-
-
 @pytest.fixture
 def disable_temp_tables():
     """Force staging tables (not TEMP) so tests can inspect them."""
@@ -655,12 +657,16 @@ def get_object(ingest_resources):
         rejects = get_object("rejects", fetchlogs_id=42)
     """
     def _fetch(name: str, **params):
-        if name not in _QUERIES:
+        if name in DIAGNOSTIC_QUERIES:
+            sql = DIAGNOSTIC_QUERIES[name]['sql']
+        elif name in _QUERIES:
+            sql = _QUERIES[name]
+        else:
             raise ValueError(
                 f"Unknown query '{name}'. Available: {sorted(_QUERIES)}"
             )
         with ingest_resources.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(_QUERIES[name], params)
+            cur.execute(sql, params)
             return cur.fetchall()
 
     return _fetch

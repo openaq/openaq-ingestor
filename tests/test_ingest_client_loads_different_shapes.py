@@ -10,7 +10,7 @@ from psycopg2.extras import RealDictCursor
 ## I have added the interval keys to the lcs file shape for the sake of simplicity
 ## we could also add them to the lcs adapters if those wont be converted to transform right away
 files = {
-    "realtime.ndjson": """{"date": {  "utc": "2024-04-08T21:25:00.000Z",  "local": "2024-04-09T00:25:00+03:00"},"parameter": "no","value": 0.2,"unit": "ppb","averagingPeriod": {  "unit": "hours",  "value": 0.25},"location": "station1","city": "portland, OR","country": "US","coordinates": {  "latitude": 42.8011974,  "longitude": -122.99144547},"attribution": [  { "name": "Station #1", "url": "https://fake-stations.gov"  }],"sourceName": "testing","sourceType": "government","mobile": false }""",
+    "realtime.ndjson": """{"date": {  "utc": "2024-04-08T21:25:00.000Z",  "local": "2024-04-09T00:25:00+03:00"},"parameter": "no","value": 0.2,"unit": "ppb","averagingPeriod": {  "unit": "hours",  "value": 0.25},"location": "Station #1", "id":"station1","city": "portland, OR","country": "US","coordinates": {  "latitude": 42.8011974,  "longitude": -122.99144547},"attribution": [  { "name": "fake-provider", "url": "https://fake-stations.gov"  }],"sourceName": "testing","sourceType": "government","mobile": false }""",
     "lcs.json":"""
     {
   "meta": {
