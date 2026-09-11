@@ -40,6 +40,23 @@ QUERIES = {
             ORDER BY source_name
         """,
     },
+    "fetcher-response": {
+        "title": "Fetcher response summary",
+        "sql": """
+            SELECT fetchlogs_id
+            , source_name
+            , locations
+            , systems
+            , sensors
+            , flags
+            , datetime_from
+            , datetime_to
+            --, st_astext(boundary) as bounds
+            FROM fetcher_responses
+            WHERE fetchlogs_id = %(fetchlogs_id)s
+            ORDER BY source_name
+        """,
+    },
     "ingested-summary": {
         "title": "Data ingested for this fetchlog",
         "sql": """
@@ -630,6 +647,7 @@ PACKS = {
     "summary": [
         "staged-summary",
         "added-summary",
+        "ingested-summary",
         "sensor-unit-summary",
         "instrument-summary",
         "rejects-by-reason",

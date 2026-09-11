@@ -13,6 +13,18 @@ import re
 import geohash
 import traceback
 
+from psycopg2.extras import Json
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    )
+
+from typing import (
+    Any,
+    )
+
 import boto3
 import psycopg2
 import typer
@@ -32,8 +44,9 @@ from .utils import (
     load_fail,
 )
 
-app = typer.Typer()
-dir_path = os.path.dirname(os.path.realpath(__file__))
+
+## app = typer.Typer()
+## dir_path = os.path.dirname(os.path.realpath(__file__))
 VERBOSE_LEVEL = 5
 logging.addLevelName(VERBOSE_LEVEL, "VERBOSE")
 
@@ -50,6 +63,43 @@ MULTIPLIERS = {
     "hours": 3600,
     "days": 86400,
 }
+
+class SourceResponse(BaseModel):
+    source_name: str
+    message: str | None = None
+    records: int = 0
+    fetchlogs_id: int | None = None
+    locations: int | None = None
+    systems: int | None = None
+    sensors: int | None = None
+    flags: int | None = None
+    datetime_from: datetime | None = None
+    datetime_to: datetime | None = None
+    duration_seconds: float | None = None
+    started_on: datetime | None = None
+    finished_on: datetime | None = None
+    exported_on: datetime | None = None
+    errors: dict | None = None
+    parameters: list | None = None
+    boundary: list | None = None
+
+    @field_validator('duration_seconds')
+    @classmethod
+    def replace_empty_string(cls, v: Any):
+        if v == '':
+            v = None
+        return v
+
+    @field_validator('boundary')
+    @classmethod
+    def validate_boundary(cls, v: Any):
+        if v is None:
+            return None
+        if len(v) != 4:
+            raise ValueError("boundary must be [west, south, east, north]")
+        return v  # keep as list; convert at DB boundary
+
+
 
 def to_geometry(key, data):
     # could be passed as lat/lng or coordinates
@@ -415,7 +465,7 @@ class IngestClient:
     def load(self, data = {}):
         if "meta" in data.keys():
             logger.debug("loading metada")
-            self.load_metadata(data.get('meta'))
+            self.load_metadata(data.get('meta'), data.get('errors'))
         if "locations" in data.keys():
             logger.debug("loading locations")
             self.load_locations(data.get('locations'))
@@ -554,7 +604,7 @@ class IngestClient:
         self.keys.append({"key": key, "last_modified": last_modified, "fetchlogs_id": fetchlogs_id})
 
 
-    def load_metadata(self, meta):
+    def load_metadata(self, meta, errors):
         if "source" in meta.keys():
             self.source = meta.get('source')
         if "sourceName" in meta.keys():
@@ -567,6 +617,89 @@ class IngestClient:
             self.schema = meta.get('schema')
             if self.schema == "v0.1":
                 self.delim = "/"
+
+        self.insert_metadata(meta, errors)
+
+
+    def insert_metadata(self, meta, errors):
+        sql = """
+            INSERT INTO fetcher_responses (
+              source_name
+            , fetchlogs_id
+            , message
+            , records
+            , locations
+            , sensors
+            , systems
+            , flags
+            , started_on
+            , finished_on
+            , exported_on
+            , datetime_from
+            , datetime_to
+            , duration_seconds
+            , errors
+            , parameters
+            , boundary
+            )
+            VALUES(
+              %(source_name)s
+            , %(fetchlogs_id)s
+            , %(message)s
+            , %(records)s
+            , %(locations)s
+            , %(sensors)s
+            , %(systems)s
+            , %(flags)s
+            , %(started_on)s
+            , %(finished_on)s
+            , %(exported_on)s
+            , %(datetime_from)s
+            , %(datetime_to)s
+            , %(duration_seconds)s
+            , %(errors)s
+            , %(parameters)s
+            , CASE WHEN %(boundary)s IS NULL THEN NULL
+                 ELSE ST_MakeEnvelope(
+                     (%(boundary)s::float[])[1],  -- west
+                     (%(boundary)s::float[])[2],  -- south
+                     (%(boundary)s::float[])[3],  -- east
+                     (%(boundary)s::float[])[4],  -- north
+                     4326
+                 )
+            END
+            );
+            """
+
+        data = meta.get("fetchSummary", {})
+        mdl = SourceResponse(
+            source_name = self.source or meta.get('sourceId'),
+            fetchlogs_id = self.fetchlogs_id,
+            message = meta.get("schema","transform"),
+            locations = data.get("locations"),
+            sensors = data.get("sensors"),
+            systems = data.get("systems"),
+            flags = data.get("flags"),
+            records = data.get("measurements",0),
+            datetime_from = data.get("datetimeFrom"),
+            datetime_to = data.get("datetimeTo"),
+            started_on = data.get("startedOn"),
+            finished_on = data.get("finishedOn"),
+            exported_on = data.get("exportedOn"),
+            boundary = data.get("bounds"),
+            errors = errors,
+        )
+
+        connection = self.get_connection(True)
+        with connection.cursor() as cursor:
+            params = mdl.model_dump()
+            for k in ("errors", "parameters"):
+                if params[k] is not None:
+                    params[k] = Json(params[k])
+            cursor.execute(sql, params)
+
+        self.close()
+
 
     def load_locations(self, locations):
         for loc in locations:
