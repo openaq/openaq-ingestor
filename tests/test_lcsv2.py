@@ -30,8 +30,8 @@ def test_ingest_client():
     client = IngestClient();
     client.load_key(get_path('dataV2.json'), 1, str(date.today()))
     assert len(client.nodes) == 3
-    assert len(client.systems) == 0
-    assert len(client.sensors) == 0
+    assert len(client.systems) == 3, 'wrong number of systems'
+    assert len(client.sensors) == 1, 'wrong number of sensors'
     assert len(client.measurements) == 2
 
 
@@ -42,18 +42,18 @@ def test_ingest_client_realtime_measures():
     """
     client = IngestClient();
     client.load_key(get_path('testdata_realtime_measures.ndjson'), 1, str(date.today()))
-    assert len(client.nodes) == 0
-    assert len(client.systems) == 0
-    assert len(client.sensors) == 0
-    assert len(client.measurements) == 2
+    assert len(client.nodes) == 1 # we now add the nodes
+    assert len(client.systems) == 1
+    assert len(client.sensors) == 2, 'wrong number or sensors'
+    assert len(client.measurements) == 2, 'wrong number of measurements'
 
 
 def test_ingest_client_clarity():
     client = IngestClient();
     client.load_key(get_path('testdata_lcs_clarity.json'), 1, str(date.today()))
-    assert len(client.nodes) == 2
-    assert len(client.systems) == 0
-    assert len(client.sensors) == 0
+    assert len(client.nodes) == 2, 'creates the right number of nodes'
+    assert len(client.systems) == 2, 'creates the right number of systems'
+    assert len(client.sensors) == 3, 'creates the right number of sensors'
     assert len(client.measurements) == 3
 
 
@@ -67,7 +67,7 @@ def test_ingest_client_senstate():
     assert len(client.measurements) == 3
     assert len(client.nodes) == 0
     assert len(client.systems) == 0
-    assert len(client.sensors) == 0
+    assert len(client.sensors) == 3
 
 
 def test_ingest_client_transform():
@@ -82,9 +82,13 @@ def test_ingest_client_transform():
 
 def test_ingest_client_handles_variable_flag_formats():
     client = IngestClient();
-    data = { "locations": [
+    data = {
+        "meta": {
+        "schema": "v0.1"
+        },
+        "locations": [
         {
-            "key": "provider-l1",
+            "key": "provider/l1",
             "site_id": "l1",
             "coordinates": {
                 "lat": 45.56665,
@@ -104,5 +108,5 @@ def test_ingest_client_handles_variable_flag_formats():
     client.load(data)
     flag = client.flags[0]
     assert len(client.flags) == 1, "Client has the right number of flags"
-    assert flag['sensor_ingest_id'] == 'provider-l1'
+    assert flag['sensor_ingest_id'] == 'provider/l1'
     assert flag['ingest_id'] == 'info::node-info'

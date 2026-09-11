@@ -5,7 +5,8 @@ __process_start timestamptz := clock_timestamp();
 __total_measurements int;
 __inserted_measurements int;
 __inserted_nulls int;
-__rejected_measurements int := 0;
+__rejected_measurements1 int := 0;
+__rejected_measurements2 int := 0;
 __rejected_nodes int := 0;
 __total_nodes int := 0;
 __updated_nodes int := 0;
@@ -51,12 +52,33 @@ INTO __total_measurements
 , __end_datetime
 FROM staging_measurements;
 
+---------------------------------------
+-- TEMPORARY FIX FOR MIGRATION
+---------------------------------------
+-- Use the process staged sensors to match measurements
+-- this should deal with the issue where a source_id could change
+-- which could happen with the legacy sources
+UPDATE staging_measurements
+ SET sensors_id = s.sensors_id
+ , measurands_id = s.measurands_id
+ , sensor_averaging_interval = make_interval(secs => p.data_averaging_period_seconds + 1)
+ , datetime_from = datetime - make_interval(secs => p.data_averaging_period_seconds)
+ , units_id = m.units_id
+ , note = 'staged-sensors-sensor-id-match'
+FROM staging_sensors s
+JOIN sensors p ON (s.sensors_id = p.sensors_id)
+JOIN measurands m ON (p.measurands_id = m.measurands_id)
+WHERE s.ingest_id=staging_measurements.ingest_id;
 
+
+----------------------------
+-- INIITAL SENSOR ID MATCH
+----------------------------
 -- 	The ranking is to deal with the current possibility
 -- that duplicate sensors with the same ingest/source id are created
 	-- this is a short term fix
 	-- a long term fix would not allow duplicate source_id's
-WITH staged_sensors AS (
+WITH distinct_measurement_sensors AS (
   -- this first part significantly speeds it up on slow machines
   SELECT DISTINCT ingest_id
   FROM staging_measurements
@@ -67,7 +89,8 @@ WITH staged_sensors AS (
   , s.data_averaging_period_seconds
 	, RANK() OVER (PARTITION BY s.source_id ORDER BY added_on ASC) as rnk
 	FROM sensors s
-	JOIN staged_sensors m ON (s.source_id = m.ingest_id)
+	JOIN distinct_measurement_sensors m ON (s.source_id = m.ingest_id)
+	--JOIN staged_sensors m ON (s.sensors_id = m.sensors_id)
 ), active_sensors AS (
 	SELECT source_id
 	, sensors_id
@@ -80,10 +103,38 @@ WITH staged_sensors AS (
   , measurands_id=s.measurands_id
   , sensor_averaging_interval=make_interval(secs => s.data_averaging_period_seconds + 1)
   , datetime_from=datetime - make_interval(secs => s.data_averaging_period_seconds)
+  , units_id = CASE WHEN staging_measurements.units IS NOT NULL
+               THEN get_units_id(staging_measurements.units)
+               ELSE m.units_id END -- use defaul units
+  , note = 'initial-sensor-id-match'
 	FROM active_sensors s
-	WHERE s.source_id=ingest_id;
+  JOIN measurands m USING (measurands_id)
+	WHERE s.source_id=ingest_id
+  AND staging_measurements.sensors_id IS NULL;
 
 
+-- before we do this next part we need to check to see if the measurand is supported
+WITH deleted AS (
+  DELETE FROM staging_measurements
+  WHERE sensors_id IS NULL
+  AND measurand NOT IN (SELECT key FROM active_measurands_view)
+  RETURNING *
+), r AS (
+  INSERT INTO rejects (t, tbl, r, fetchlogs_id)
+  SELECT now(),
+         'staging_measurements-missing-measurands-id',
+         to_jsonb(deleted),
+         fetchlogs_id
+  FROM deleted
+  RETURNING 1
+)
+SELECT COUNT(*) INTO __rejected_measurements1
+FROM r;
+
+
+-----------------------------------------------
+-- ADDING NODES & SYSTEMS (measurement only)
+----------------------------------------------
 -- Now we have to fill in any missing information
 -- first add the nodes and systems that dont exist
 -- add just the bare minimum amount of data to the system
@@ -96,14 +147,14 @@ INSERT INTO sensor_nodes (
 , metadata)
 SELECT source_name
 , source_name
-, source_id
-, jsonb_build_object('fetchlogs_id', MIN(fetchlogs_id))
+, node_source_id
+, jsonb_build_object('fetchlogs_id', MIN(fetchlogs_id), 'added-from', 'measurements')
 FROM staging_measurements
 WHERE sensors_id IS NULL
 GROUP BY 1,2,3
-ON CONFLICT (source_name, source_id) DO UPDATE
-SET source_id = EXCLUDED.source_id
-, metadata = EXCLUDED.metadata||COALESCE(sensor_nodes.metadata, '{}'::jsonb)
+--ON CONFLICT (source_name, source_id, geom) DO UPDATE
+ON CONFLICT ON CONSTRAINT sensor_nodes_deployment_key DO UPDATE
+SET metadata = EXCLUDED.metadata||COALESCE(sensor_nodes.metadata, '{}'::jsonb)
 RETURNING sensor_nodes_id, source_id)
 INSERT INTO sensor_systems (
   sensor_nodes_id
@@ -113,12 +164,15 @@ SELECT sensor_nodes_id
 FROM nodes
 ON CONFLICT DO NOTHING;
 
+-----------------------------------------------
+-- ADDING SENSORS (measurement only)
+----------------------------------------------
 -- now create a sensor for each
 -- this method depends on us having a match for the parameter
 WITH sen AS (
   SELECT ingest_id
   , source_name
-  , source_id
+  , node_source_id as source_id
   , measurand as parameter
   FROM staging_measurements
   WHERE sensors_id IS NULL
@@ -129,7 +183,7 @@ SELECT sy.sensor_systems_id
 , m.measurands_id
 , ingest_id
 FROM sen s
-JOIN measurands_map_view m ON (s.parameter = m.key)
+JOIN active_measurands_view m ON (s.parameter = m.key)
 JOIN sensor_nodes n ON (s.source_name = n.source_name AND s.source_id = n.source_id)
 JOIN sensor_systems sy ON (sy.sensor_nodes_id = n.sensor_nodes_id AND s.source_id = sy.source_id)
 ON CONFLICT DO NOTHING
@@ -137,12 +191,22 @@ RETURNING sensor_systems_id)
 SELECT COUNT(DISTINCT sensor_systems_id) INTO __inserted_nodes
 FROM inserts;
 
+----------------------------
+-- SECOND SENSOR ID MATCH
+----------------------------
 -- try again to find the sensors
 UPDATE staging_measurements
-SET sensors_id=s.sensors_id
+SET sensors_id = s.sensors_id
   , measurands_id = s.measurands_id
+  , sensor_averaging_interval = make_interval(secs => s.data_averaging_period_seconds + 1)
+  , datetime_from = datetime - make_interval(secs => s.data_averaging_period_seconds)
+  , units_id = CASE WHEN staging_measurements.units IS NOT NULL
+               THEN get_units_id(staging_measurements.units)
+               ELSE m.units_id END -- use defaul units
+  , note = 'second-sensor-id-match'
 FROM sensors s
-WHERE s.source_id=ingest_id
+JOIN measurands m USING (measurands_id)
+WHERE s.source_id = ingest_id
 AND staging_measurements.sensors_id IS NULL;
 
 
@@ -152,6 +216,79 @@ FROM staging_measurements;
 
 __process_time_ms := 1000 * (extract(epoch FROM clock_timestamp() - __process_start));
 __process_start := clock_timestamp();
+
+
+-------------------------------------------
+-- REJECT UNSUPPORTED MEASURANDS
+-------------------------------------------
+INSERT INTO rejects (t, tbl, r, fetchlogs_id)
+SELECT current_timestamp,
+       'meas-unsupported-measurand',
+       to_jsonb(sm),
+       sm.fetchlogs_id
+  FROM staging_measurements sm
+ WHERE sensors_id IS NULL;
+----------------
+DELETE
+  FROM staging_measurements
+ WHERE sensors_id IS NULL;
+
+
+-------------------------------------------
+-- UPDATE MEASUREMENT UNITS BASED ON SENSOR
+-------------------------------------------
+-- at this point everything should have a measurand id
+-- e.g. if the sensor is ppb and the measurement says ppm we need to transform it
+-- if the units are the same we do nothing
+-- if the measurement doesnt specify units we must assume they match the sensor
+-- if the measurement units are not transformable we reject them
+-- We are using a lateral join in case we need to account for the measurand spefically
+WITH conversions AS (
+  SELECT sm.ctid,
+         sm.value * uc.factor + uc.intercept AS new_value,
+         m.units_id AS new_units_id,
+         u.units    AS new_units
+    FROM staging_measurements sm
+    JOIN sensors s     ON s.sensors_id     = sm.sensors_id
+    JOIN measurands m  ON m.measurands_id  = s.measurands_id
+    JOIN units u       ON u.units_id       = m.units_id
+    JOIN LATERAL (
+         SELECT factor
+            , intercept
+           FROM unit_conversions uc
+            WHERE uc.from_units_id = sm.units_id
+            AND uc.to_units_id   = m.units_id
+            AND (uc.measurand IS NULL OR uc.measurand = m.measurand)
+          ORDER BY (uc.measurand IS NOT NULL) DESC
+          LIMIT 1
+         ) uc ON true
+   WHERE sm.units_id IS DISTINCT FROM m.units_id
+)
+UPDATE staging_measurements sm
+   SET value          = c.new_value,
+       units_id       = c.new_units_id,
+       units          = c.new_units
+  FROM conversions c
+ WHERE sm.ctid = c.ctid;
+
+
+
+-------------------------------------------
+-- REJECT WRONG UNITS
+-------------------------------------------
+INSERT INTO rejects (t, tbl, r, fetchlogs_id)
+SELECT current_timestamp,
+       'meas-no-unit-conversion',
+       to_jsonb(sm),
+       sm.fetchlogs_id
+  FROM staging_measurements sm
+  JOIN measurands m ON m.measurands_id = sm.measurands_id
+ WHERE sm.units_id IS DISTINCT FROM m.units_id;
+----------------
+DELETE FROM staging_measurements sm
+ USING measurands m
+ WHERE m.measurands_id = sm.measurands_id
+   AND sm.units_id IS DISTINCT FROM m.units_id;
 
 
 -- flag the bad data based on our measurand limits
@@ -165,9 +302,9 @@ WITH flagged_measurements AS (
   AND p.upper_limit IS NOT NULL
   AND p.lower_limit IS NOT NULL
   AND (m.value > p.upper_limit OR m.value < p.lower_limit)
-  RETURNING ingest_id, sensors_id, datetime, datetime_from, sensor_averaging_interval
+  RETURNING m.ingest_id as sensor_ingest_id, sensors_id, datetime, datetime_from, sensor_averaging_interval
 ), flagged_measurement_events AS (
-  SELECT ingest_id
+  SELECT sensor_ingest_id
   , sensors_id
   , datetime_from
   , datetime as datetime_to
@@ -177,20 +314,22 @@ WITH flagged_measurements AS (
   THEN 1 ELSE 0 END AS flag_event
   FROM flagged_measurements fm
 ), pending_flags AS (
-  SELECT ingest_id
+  SELECT sensor_ingest_id
   , sensors_id
   , tstzrange(MIN(datetime_from), MAX(datetime_to), '[]') as period
   FROM flagged_measurement_events
-  GROUP BY ingest_id, sensors_id, flag_event
+  GROUP BY sensor_ingest_id, sensors_id, flag_event
 ), relevant_flags AS (
   -- Pre-filter the flags table to just what could possibly match
-  SELECT f.flags_id, f.period, f.sensors_ids
+  SELECT f.flags_id
+  , f.period
+  , f.sensors_ids
   FROM flags f
   WHERE f.flag_types_id = 4
   AND f.sensors_ids && (SELECT array_agg(DISTINCT sensors_id) FROM pending_flags)
   AND f.period && (SELECT tstzrange(MIN(lower(period)), MAX(upper(period)), '[]') FROM pending_flags)
 ) INSERT INTO staging_flags (sensor_ingest_id, sensors_id, period, flags_id, flag_types_id, sensor_nodes_id)
-  SELECT ingest_id
+  SELECT pf.sensor_ingest_id
   , pf.sensors_id
   , pf.period
   , rf.flags_id
@@ -242,7 +381,7 @@ SELECT
 FROM staging_measurements
 WHERE sensors_id IS NULL
 RETURNING 1)
-SELECT COUNT(1) INTO __rejected_measurements
+SELECT COUNT(1) INTO __rejected_measurements2
 FROM r;
 
 -- restart the clock to measure just inserts
@@ -502,7 +641,7 @@ INSERT INTO ingest_stats (
     __ingest_method
   , __total_measurements
   , __inserted_measurements
-  , __rejected_measurements
+  , __rejected_measurements1 + __rejected_measurements2
   , __total_nodes
   , __inserted_nodes
   , __updated_nodes
@@ -514,7 +653,7 @@ INSERT INTO ingest_stats (
   -- latest
   , __total_measurements
   , __inserted_measurements
-  , __rejected_measurements
+  , __rejected_measurements1 + __rejected_measurements2
   , __total_nodes
   , __inserted_nodes
   , __updated_nodes
@@ -555,7 +694,7 @@ RAISE NOTICE 'inserted-measurements: %, inserted-from: %, inserted-to: %, reject
       , __inserted_measurements
       , __inserted_start_datetime
       , __inserted_end_datetime
-      , __rejected_measurements
+      , __rejected_measurements1 + __rejected_measurements2
       , __exported_days
       , __process_time_ms
       , __flagging_time_ms

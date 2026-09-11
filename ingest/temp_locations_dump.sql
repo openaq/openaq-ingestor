@@ -33,6 +33,8 @@ CREATE {table} IF NOT EXISTS staging_sensorsystems (
     sensor_systems_id int,
     is_new boolean DEFAULT true,
     ingest_id text NOT NULL UNIQUE,
+    manufacturer_key text,
+    model_key text,
     instrument_ingest_id text,
     ingest_sensor_nodes_id text,
     sensor_nodes_id int,

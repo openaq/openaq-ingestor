@@ -688,11 +688,11 @@ def write_csv(cursor, data, table, columns):
         >>> write_csv(cursor, data, 'measurements', ['id', 'value'])
         >>> connection.commit()
     """
-    logger.debug(f"copying {len(data)} rows from table: {table}")
+    logger.debug(f"copying {len(data)} rows to {table}")
     if len(data)>0:
         fields = ",".join(columns)
         sio = StringIO()
-        writer = csv.DictWriter(sio, columns)
+        writer = csv.DictWriter(sio, columns, extrasaction="ignore")
         writer.writerows(data)
         sio.seek(0)
         cursor.copy_expert(
@@ -768,3 +768,168 @@ def upsert_fetchlogs(keys: list, connection=None):
         rows = cursor.fetchall()
         logger.debug(f'Inserted {len(rows)} from {len(keys)} keys')
         return rows
+
+# ---------------------------------------------------------------------------
+# Key resolution
+# ---------------------------------------------------------------------------
+
+def read_keys_from_file(path: str) -> list[str]:
+    """Read keys from a file, one per line.
+
+    Skips blank lines and lines starting with '#'.
+
+    Args:
+        path: Path to file containing keys
+
+    Returns:
+        list[str]: Non-empty, non-comment lines
+    """
+    with open(path) as f:
+        return [
+            line.strip() for line in f
+            if line.strip() and not line.startswith("#")
+        ]
+
+
+def resolve_by_id(id: int, *, connection=None) -> list:
+    """Return single fetchlog row by id."""
+    return load_fetchlogs(id=id, limit=1, force=True, connection=connection)
+
+
+def resolve_by_key(key: str, *, connection=None) -> list:
+    """Upsert one key to fetchlogs and return the row."""
+    return upsert_fetchlogs([key], connection=connection)
+
+
+def resolve_by_keys(keys: list, *, connection=None) -> list:
+    """Upsert multiple keys and return the rows."""
+    return upsert_fetchlogs(keys, connection=connection)
+
+
+def resolve_by_batch(batch: str, *, limit: int = 300,
+                     connection=None) -> list:
+    """Return all fetchlog rows in a batch."""
+    return load_fetchlogs(batch=batch, limit=limit, force=True,
+                          connection=connection)
+
+
+def resolve_by_pattern(pattern: str, *, limit: int = 300,
+                       connection=None) -> list:
+    """Query fetchlogs by PostgreSQL regex pattern."""
+    return load_fetchlogs(pattern=pattern, limit=limit, force=True,
+                          connection=connection)
+
+
+def resolve_by_prefix(bucket: str, prefix: str = "", *,
+                      limit: int = 300, connection=None,
+                      resources=None) -> list:
+    """List S3 keys under a prefix and upsert to fetchlogs."""
+    keys = list_objects(bucket, prefix=prefix, limit=limit,
+                        resources=resources)
+    return upsert_fetchlogs(keys, connection=connection)
+
+
+def resolve_from_file(path: str, *, connection=None) -> list:
+    """Read keys from a file and upsert to fetchlogs."""
+    keys = read_keys_from_file(path)
+    return upsert_fetchlogs(keys, connection=connection)
+
+
+# ---------------------------------------------------------------------------
+# File download
+# ---------------------------------------------------------------------------
+
+def download_from_location(path: dict, output_path: str = None,
+                           resources=None) -> dict:
+    """Download an S3 file to the local filesystem.
+
+    Handles gzip decompression transparently (via get_object).
+
+    Args:
+        path: dict from deconstruct_path() with 'location', 'bucket', 'key'
+        output_path: base directory for download; defaults to
+            ~/Downloads/openaq-ingestor/
+        resources: optional Resources instance
+
+    Returns:
+        dict: Updated path dict pointing to the local file. If path was
+              already local, returns it unchanged.
+
+    Raises:
+        SystemExit: if location cannot be determined
+    """
+    location = path.get('location')
+
+    if location == 'local':
+        logger.info(f"Already local: {path.get('key')}")
+        return path
+
+    if location != 's3':
+        raise SystemExit(
+            f"Cannot download from location: {location!r}"
+        )
+
+    bucket = path.get('bucket')
+    key = path.get('key')
+    content = get_object(key=key, bucket=bucket, resources=resources)
+
+    base = Path(output_path) if output_path else (
+        Path.home() / 'Downloads' / 'openaq-ingestor'
+    )
+    download_path = base / key
+    download_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # get_object decompresses; strip .gz from the output name
+    output_file = str(download_path).replace('.gz', '')
+    with open(output_file, 'w') as f:
+        f.write(content)
+
+    logger.info(f"Downloaded {key} → {output_file} "
+                f"({len(content)} chars)")
+    return deconstruct_path(output_file)
+
+
+# ---------------------------------------------------------------------------
+# Diagnostic queries
+# ---------------------------------------------------------------------------
+
+def get_table(connection, sql: str, *, filename: str = None,
+              head: int = None, title: str = None) -> None:
+    """Execute SQL and print results, optionally writing to CSV.
+
+    Args:
+        connection: psycopg2 connection
+        sql: query to execute
+        filename: if provided, write full results to this CSV file
+        head: if provided, print only this many rows to the console
+        title: optional heading to print before the table
+    """
+    from psycopg2.extras import RealDictCursor
+    from tabulate import tabulate
+
+    with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+        cursor.execute(sql)
+        rows = cursor.fetchall()
+
+        print(f"\n\n{'=' * 75}\n{'=' * 75}\n{title or ''}")
+        if not rows:
+            if not title and filename:
+                print(f"{filename}\n")
+            print("(no rows)")
+            return
+
+        if filename:
+            with open(filename, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+                writer.writeheader()
+                writer.writerows(rows)
+            print(f"Wrote {len(rows)} rows to {filename}")
+            if head:
+                preview = rows[:head]
+                print(f"First {len(preview)} of {len(rows)}:")
+                print(tabulate(preview, headers="keys", tablefmt="github"))
+        else:
+            display = rows[:head] if head else rows
+            if head and len(rows) > head:
+                print(f"Showing first {head} of {len(rows)}:")
+            print(tabulate(display, headers="keys", tablefmt="github"))
