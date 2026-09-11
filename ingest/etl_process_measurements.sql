@@ -5,7 +5,8 @@ __process_start timestamptz := clock_timestamp();
 __total_measurements int;
 __inserted_measurements int;
 __inserted_nulls int;
-__rejected_measurements int := 0;
+__rejected_measurements1 int := 0;
+__rejected_measurements2 int := 0;
 __rejected_nodes int := 0;
 __total_nodes int := 0;
 __updated_nodes int := 0;
@@ -51,6 +52,9 @@ INTO __total_measurements
 , __end_datetime
 FROM staging_measurements;
 
+---------------------------------------
+-- TEMPORARY FIX FOR MIGRATION
+---------------------------------------
 -- Use the process staged sensors to match measurements
 -- this should deal with the issue where a source_id could change
 -- which could happen with the legacy sources
@@ -109,6 +113,25 @@ WITH distinct_measurement_sensors AS (
   AND staging_measurements.sensors_id IS NULL;
 
 
+-- before we do this next part we need to check to see if the measurand is supported
+WITH deleted AS (
+  DELETE FROM staging_measurements
+  WHERE sensors_id IS NULL
+  AND measurand NOT IN (SELECT key FROM active_measurands_view)
+  RETURNING *
+), r AS (
+  INSERT INTO rejects (t, tbl, r, fetchlogs_id)
+  SELECT now(),
+         'staging_measurements-missing-measurands-id',
+         to_jsonb(deleted),
+         fetchlogs_id
+  FROM deleted
+  RETURNING 1
+)
+SELECT COUNT(*) INTO __rejected_measurements1
+FROM r;
+
+
 -----------------------------------------------
 -- ADDING NODES & SYSTEMS (measurement only)
 ----------------------------------------------
@@ -124,7 +147,7 @@ INSERT INTO sensor_nodes (
 , metadata)
 SELECT source_name
 , source_name
-, source_id
+, node_source_id
 , jsonb_build_object('fetchlogs_id', MIN(fetchlogs_id), 'added-from', 'measurements')
 FROM staging_measurements
 WHERE sensors_id IS NULL
@@ -149,7 +172,7 @@ ON CONFLICT DO NOTHING;
 WITH sen AS (
   SELECT ingest_id
   , source_name
-  , source_id
+  , node_source_id as source_id
   , measurand as parameter
   FROM staging_measurements
   WHERE sensors_id IS NULL
@@ -160,7 +183,7 @@ SELECT sy.sensor_systems_id
 , m.measurands_id
 , ingest_id
 FROM sen s
-JOIN measurands_map_view m ON (s.parameter = m.key)
+JOIN active_measurands_view m ON (s.parameter = m.key)
 JOIN sensor_nodes n ON (s.source_name = n.source_name AND s.source_id = n.source_id)
 JOIN sensor_systems sy ON (sy.sensor_nodes_id = n.sensor_nodes_id AND s.source_id = sy.source_id)
 ON CONFLICT DO NOTHING
@@ -358,7 +381,7 @@ SELECT
 FROM staging_measurements
 WHERE sensors_id IS NULL
 RETURNING 1)
-SELECT COUNT(1) INTO __rejected_measurements
+SELECT COUNT(1) INTO __rejected_measurements2
 FROM r;
 
 -- restart the clock to measure just inserts
@@ -618,7 +641,7 @@ INSERT INTO ingest_stats (
     __ingest_method
   , __total_measurements
   , __inserted_measurements
-  , __rejected_measurements
+  , __rejected_measurements1 + __rejected_measurements2
   , __total_nodes
   , __inserted_nodes
   , __updated_nodes
@@ -630,7 +653,7 @@ INSERT INTO ingest_stats (
   -- latest
   , __total_measurements
   , __inserted_measurements
-  , __rejected_measurements
+  , __rejected_measurements1 + __rejected_measurements2
   , __total_nodes
   , __inserted_nodes
   , __updated_nodes
@@ -671,7 +694,7 @@ RAISE NOTICE 'inserted-measurements: %, inserted-from: %, inserted-to: %, reject
       , __inserted_measurements
       , __inserted_start_datetime
       , __inserted_end_datetime
-      , __rejected_measurements
+      , __rejected_measurements1 + __rejected_measurements2
       , __exported_days
       , __process_time_ms
       , __flagging_time_ms

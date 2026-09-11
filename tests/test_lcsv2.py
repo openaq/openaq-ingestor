@@ -82,9 +82,13 @@ def test_ingest_client_transform():
 
 def test_ingest_client_handles_variable_flag_formats():
     client = IngestClient();
-    data = { "locations": [
+    data = {
+        "meta": {
+        "schema": "v0.1"
+        },
+        "locations": [
         {
-            "key": "provider-l1",
+            "key": "provider/l1",
             "site_id": "l1",
             "coordinates": {
                 "lat": 45.56665,
@@ -104,5 +108,5 @@ def test_ingest_client_handles_variable_flag_formats():
     client.load(data)
     flag = client.flags[0]
     assert len(client.flags) == 1, "Client has the right number of flags"
-    assert flag['sensor_ingest_id'] == 'provider-l1'
+    assert flag['sensor_ingest_id'] == 'provider/l1'
     assert flag['ingest_id'] == 'info::node-info'

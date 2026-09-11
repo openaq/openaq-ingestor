@@ -37,6 +37,7 @@ import logging
 import os
 import sys
 from time import time
+from datetime import datetime, timezone
 
 import psycopg2
 
@@ -237,8 +238,10 @@ def process_one(row, resources, args) -> dict:
             connection.rollback()
             return result
 
-        client.dump(load=not args.stage_only)
+        client.dump_locations(load=not args.stage_only)
+        client.dump_measurements(load=not args.stage_only)
 
+        #[print(x) for x in client.systems.values()]
         # Stats before commit/rollback (staging still visible).
         elapsed = round(time() - start, 3)
         result.update(client.stats(connection, elapsed))
@@ -405,6 +408,9 @@ def _source_connection(args):
 def main():
     args = parse_args()
     setup_logging(args)
+
+    run_started_at = datetime.now(timezone.utc)
+    logger.debug(f"Run started at {run_started_at.isoformat()}")
 
     if args.diagnose == 'list':
         from ingest.diagnostics import list_queries

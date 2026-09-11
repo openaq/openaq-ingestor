@@ -14,7 +14,6 @@ files = {
     "lcs.json":"""
     {
   "meta": {
-    "schema": "v0.1",
     "source": "testing",
     "matching_method": "source-spatial"
   },
@@ -62,7 +61,7 @@ files = {
   },
   "locations": [
     {
-      "key": "testing-station1",
+      "key": "testing/station1",
       "site_id": "station1",
       "site_name": "Station #1",
       "coordinates": {
@@ -74,12 +73,12 @@ files = {
       "flags": [],
       "systems": [
         {
-          "key": "testing-station1",
+          "key": "testing/station1",
           "manufacturer_name": "default",
           "model_name": "default",
           "sensors": [
             {
-              "key": "testing-station1-no",
+              "key": "testing/station1/no",
               "parameter": "no",
               "units": "ppb",
               "averaging_interval_secs": 900,
@@ -94,7 +93,7 @@ files = {
   ],
   "measures": [
     {
-      "key": "testing-station1-no",
+      "key": "testing/station1/no",
       "timestamp": "2024-04-08T21:25:00.000Z",
       "value": 0.2
     }
@@ -145,8 +144,8 @@ def test_all_shapes_are_converted(
         "fetchlogs_id": sample_fetchlog,
         "ingest_id": "testing-station1",
         "ingest_sensor_nodes_id": "testing-station1",
-        "manufacturer": "testing",
-        "model": "default",
+        "manufacturer_key": "testing",
+        "model_key": "default",
         "metadata": "{}",
     }
     for field, expected in expected_system_fields.items():
@@ -177,7 +176,8 @@ def test_all_shapes_are_converted(
     expected_measure = [
         "testing-station1-no",
         "testing",
-        "station1",
+        "station1", ## system_source_id
+        "station1", ## node_source_id
         "no",
         "ppb",
         0.2,

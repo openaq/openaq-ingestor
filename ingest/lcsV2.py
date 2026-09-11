@@ -112,14 +112,16 @@ def to_seconds(key, data):
 
 def to_sensorid(key, data):
     param = data.get(key)
+    delim = "-"
     location = data.get('location')
     source = data.get('sourceName')
-    return f"{source}-{location}-{param}"
+    return delim.join([source, location, param])
 
 def to_nodeid(key, data):
+    delim = "-"
     location = data.get(key)
     source = data.get('sourceName')
-    return f"{source}-{location}"
+    return delim.join([source, location])
 
 
 class IngestClient:
@@ -141,6 +143,8 @@ class IngestClient:
         self.measurements = []
         self.matching_method = 'ingest-id'
         self.source = None
+        self.schema = None
+        self.delim = "-"
 
         # Resource management via resources
         if resources:
@@ -302,6 +306,8 @@ class IngestClient:
                 "staging_sensorsystems",
                 [
                     "ingest_id",
+                    "manufacturer_key",
+                    "model_key",
                     "instrument_ingest_id",
                     "ingest_sensor_nodes_id",
                     "metadata",
@@ -384,7 +390,7 @@ class IngestClient:
             )
             cursor.copy_expert(
                 """
-                COPY staging_measurements (ingest_id, source_name, source_id, measurand, units, value, datetime, lon, lat, fetchlogs_id)
+                COPY staging_measurements (ingest_id, source_name, node_source_id, system_source_id, measurand, units, value, datetime, lon, lat, fetchlogs_id)
                 FROM stdin;
                 """,
                 iterator,
@@ -454,6 +460,8 @@ class IngestClient:
 
         if is_csv:
             # all csv data will be measurements
+            self.schema = None
+            self.delim = "-"
             for rw in csv.reader(content.split("\n")):
                 self.add_measurement(rw)
         elif is_ndjson:
@@ -462,6 +470,8 @@ class IngestClient:
             measures = []
             locations = []
             ingest_ids = []
+            self.schema = None
+            self.delim = "-"
             for idx, obj in enumerate(content.split('\n')):
                 try:
                     if obj != "":
@@ -474,9 +484,8 @@ class IngestClient:
                         geo = geohash.encode(coords.get('latitude'), coords.get('longitude'), 9)
                         source_id = nd.get("id", geo)
                         source_name = nd.get("sourceName")
-                        ingest_id = f"{source_name}-{source_id}"
-                        #ingest_id = f"{nd.get('sourceName')}"
-                        sensor_ingest_id = f"{ingest_id}-{nd.get('parameter')}"
+                        ingest_id = self.delim.join([source_name, source_id])
+                        sensor_ingest_id = self.delim.join([ingest_id, nd.get('parameter')])
                         interval_seconds = to_seconds('averagingPeriod', nd)
                         units = nd.get("unit", "")
                         parameter = f"{nd.get("parameter", "")}"
@@ -514,7 +523,8 @@ class IngestClient:
                         self.add_measurement({
                             "ingest_id": sensor_ingest_id,
                             "source_name": source_name,
-                            "source_id": source_id,
+                            "node_source_id": source_id,
+                            "system_source_id": source_id,
                             "date": nd.get("date"),
                             "measurand": parameter,
                             "unit": units,
@@ -555,6 +565,8 @@ class IngestClient:
             self.matching_method = meta.get('matching_method')
         if "schema" in meta.keys():
             self.schema = meta.get('schema')
+            if self.schema == "v0.1":
+                self.delim = "/"
 
     def load_locations(self, locations):
         for loc in locations:
@@ -613,7 +625,7 @@ class IngestClient:
 
             if not sensor.get('measurand'):
                 # get it from the ingest id
-                ingest_arr = sensor.get('ingest_id').split('-')
+                ingest_arr = sensor.get('ingest_id').split(self.delim)
                 sensor['measurand'] = ingest_arr[-1] # take the last one
             sensor["metadata"] = orjson.dumps(metadata).decode()
             if id not in self.sensors:
@@ -710,13 +722,13 @@ class IngestClient:
                 # would it make more sense to merge or skip or throw error?
                 continue
 
-            ingest_arr = id.split('-')
+            ingest_arr = id.split(self.delim)
             # this will not work with a uuid passed as a site id
             if len(ingest_arr) == 3:
                 instrument = (ingest_arr[-1]).split('::')
-                system['manufacturer'] = instrument[0]
-                system['model'] = instrument[1] if len(instrument)>1 else 'default'
-                #system["instrument_ingest_id"] = ingest_arr[-1];
+                system['manufacturer_key'] = instrument[0]
+                system['model_key'] = instrument[1] if len(instrument)>1 else 'default'
+                system["instrument_ingest_id"] = ingest_arr[-1];
 
             system["ingest_sensor_nodes_id"] = node_id
 
@@ -727,25 +739,26 @@ class IngestClient:
                 if key == "sensors":
                     self.add_sensors(value, id, fetchlogsId)
                 elif key == 'manufacturer_name':
-                    system['manufacturer'] = s.get('manufacturer_name')
+                    system['manufacturer_key'] = s.get('manufacturer_name')
                 elif key == 'model_name':
-                    system['model'] = s.get('model_name')
+                    system['model_key'] = s.get('model_name')
                 elif key == 'instrument':
                     instrument = s.get('instrument').split('::')
-                    system['manufacturer'] = instrument[0]
-                    system['model'] = instrument[1] if len(instrument)>1 else 'default'
+                    system['manufacturer_key'] = instrument[0]
+                    system['model_key'] = instrument[1] if len(instrument)>1 else 'default'
                 elif key not in ["sensor_system_id","key","system_id"]:
                     metadata[key] = value
 
             system["metadata"] = orjson.dumps(metadata).decode()
 
-            if system.get('manufacturer') in (None,'default'):
-                system['manufacturer'] = ingest_arr[0]
+            if system.get('manufacturer_key') in (None,'default'):
+                system['manufacturer_key'] = ingest_arr[0]
 
-            if 'model' not in system.keys():
-                system['model'] = 'default'
+            if 'model_key' not in system.keys():
+                system['model_key'] = 'default'
 
             logger.debug(f"Adding system {id}")
+
             self.systems[id] = system
 
 
@@ -771,7 +784,7 @@ class IngestClient:
                 logger.error(f'Missing ingest id {node}')
                 raise Exception('Missing ingest id')
 
-            ingest_arr = ingest_id.split('-')
+            ingest_arr = ingest_id.split(self.delim)
 
             # source name could be set explicitly
             # or in the ingest id
@@ -788,7 +801,7 @@ class IngestClient:
             if node.get('source_id') is None:
                 if len(ingest_arr)>1:
                     # updated to handle uuid
-                    node['source_id'] = '-'.join(ingest_arr[1:len(ingest_arr)])
+                    node['source_id'] = self.delim.join(ingest_arr[1:len(ingest_arr)])
                 else:
                     node['source_id'] = ingest_arr[0]
 
@@ -827,7 +840,8 @@ class IngestClient:
         lon = None
         units = None
         source_name = None
-        source_id = None
+        node_source_id = None
+        system_source_id = None
         measurand = None
 
         # csv method
@@ -860,7 +874,8 @@ class IngestClient:
             measurand = meas.get('measurand')
             units = meas.get('units')
             source_name = meas.get('source_name')
-            source_id = meas.get('source_id')
+            node_source_id = meas.get('node_source_id')
+            system_source_id = meas.get('system_source_id')
 
             if units is None:
                 ## if the data is new and the sensor exists
@@ -877,40 +892,39 @@ class IngestClient:
             raise Exception(f"Could not find ingest id in {meas}")
 
         # parse the ingest id here only if we need it
-        if None in [source_name, source_id, measurand]:
-            ingest_arr = ingest_id.split('-')
-            if source_name is None:
-                source_name = ingest_arr[0]
-
+        if None in [source_name, node_source_id, system_source_id, measurand]:
+            ingest_arr = ingest_id.split(self.delim)
             if len(ingest_arr) < 3:
                 logger.warning(f'Not enough information in ingest-id: `{ingest_id}`')
                 return
 
-            elif len(ingest_arr) == 3:
-                source_name = ingest_arr[0]
-                source_id = '-'.join(ingest_arr[1:len(ingest_arr)-1])
-                measurand = ingest_arr[-1]
+            if source_name is None:
+                source_name = ingest_arr[0] ## first one
+            if measurand is None:
+                measurand = ingest_arr[-1]  ## last one
+            if system_source_id is None: ## this is the system source id
+                system_source_id = self.delim.join(ingest_arr[1:len(ingest_arr)-1])  ## all the middle ones
+            if node_source_id is None:
+                if self.schema is None:
+                    node_source_id = self.delim.join(ingest_arr[1:len(ingest_arr)-1])  ## all the middle ones
+                else:
+                    node_source_id = ingest_arr[1]
 
-            elif len(ingest_arr) > 3:
-                logger.info(f"{source_name}/{measurand}/{source_id}/{ingest_arr}")
-                source_name = ingest_arr[0]
-                source_id = '-'.join(ingest_arr[1:len(ingest_arr)-1])
-                measurand = ingest_arr[-1]
-
-        if not None in [ingest_id, datetime, source_name, source_id, measurand]:
+        if not None in [ingest_id, datetime, source_name, node_source_id, system_source_id,  measurand]:
             ## this is to solve a realtime issue
             if ingest_id not in self.sensors:
                 ## I need to look up the node
-                node_ingest_id = f"{source_name}-{source_id}"
+                node_ingest_id = self.delim.join([source_name, node_source_id])
                 node = self.nodes.get(node_ingest_id, {})
                 self.add_sensors([{
                     "key": ingest_id,
                     "averaging_interval_secs": node.get("averaging_interval_secs"),
                     "logging_interval_secs": node.get("logging_interval_secs")
                 }], node_ingest_id, fetchlogs_id)
-            self.measurements.append([ingest_id, source_name, source_id, measurand, units, value, datetime, lon, lat, fetchlogs_id])
+            logger.debug(f"Adding measurement: {source_name}|{system_source_id}|{measurand}|{units}")
+            self.measurements.append([ingest_id, source_name, node_source_id, system_source_id, measurand, units, value, datetime, lon, lat, fetchlogs_id])
         else:
-            logger.warning(f"Something was not set {[ingest_id, datetime, source_name, source_id, measurand]} - {ingest_arr} - {m}")
+            logger.warning(f"Something was not set {[ingest_id, datetime, source_name, node_source_id, system_source_id, measurand]} - {ingest_arr} - {m}")
 
 
     def refresh_cached_tables(self):

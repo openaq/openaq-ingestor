@@ -22,6 +22,70 @@ QUERIES = {
             ORDER BY source_name, source_id
         """,
     },
+    "added-summary": {
+        "title": "Nodes added for this fetchlog",
+        "sql": """
+            SELECT source_name
+            , n.metadata->>'added-from' as from
+            , COUNT(DISTINCT n.sensor_nodes_id) as nodes
+            , COUNT(DISTINCT y.sensor_systems_id) as systems
+            , COUNT(DISTINCT s.sensors_id) as sensors
+            , COUNT(datetime) as measurements
+            FROM sensor_nodes n
+            LEFT JOIN sensor_systems y ON (n.sensor_nodes_id = y.sensor_nodes_id)
+            LEFT JOIN sensors s ON (y.sensor_systems_id = s.sensor_systems_id)
+            LEFT JOIN measurements m ON (s.sensors_id = m.sensors_id)
+            WHERE (n.metadata->>'fetchlogs_id')::int = %(fetchlogs_id)s
+            GROUP BY source_name, 2
+            ORDER BY source_name
+        """,
+    },
+    "ingested-summary": {
+        "title": "Data ingested for this fetchlog",
+        "sql": """
+            SELECT MIN(datetime) as first
+            , MAX(datetime) as last
+            , COUNT(datetime)
+            , COUNT(DISTINCT s.ingest_id) FILTER (WHERE s.is_new) as sensors_a
+            , COUNT(DISTINCT s.ingest_id) FILTER (WHERE NOT s.is_new) as sensors_m
+            , COUNT(DISTINCT y.ingest_id) FILTER (WHERE y.is_new) as systems_a
+            , COUNT(DISTINCT y.ingest_id) FILTER (WHERE NOT y.is_new) as systems_m
+            , COUNT(DISTINCT n.ingest_id) FILTER (WHERE n.is_new) as nodes_a
+            , COUNT(DISTINCT n.ingest_id) FILTER (WHERE NOT n.is_new) as nodes_m
+            FROM staging_sensornodes n
+            LEFT JOIN staging_sensorsystems y ON (n.sensor_nodes_id = y.sensor_nodes_id)
+            LEFT JOIN staging_sensors s ON (y.sensor_systems_id = s.sensor_systems_id)
+            LEFT JOIN staging_measurements m ON (s.sensors_id = m.sensors_id)
+            WHERE m.fetchlogs_id = %(fetchlogs_id)s
+            OR n.fetchlogs_id = %(fetchlogs_id)s
+        """,
+    },
+    "added-details": {
+        "title": "Nodes, systems and sensors",
+        "sql": """
+            SELECT source_name
+            , n.metadata->>'added-from' as from
+            , n.source_id as node_source_id
+            , y.source_id as system_source_id
+            , s.source_id as sensor_source_id
+            , COUNT(datetime) as measurements
+            FROM sensor_nodes n
+            LEFT JOIN sensor_systems y ON (n.sensor_nodes_id = y.sensor_nodes_id)
+            LEFT JOIN sensors s ON (y.sensor_systems_id = s.sensor_systems_id)
+            LEFT JOIN measurements m ON (s.sensors_id = m.sensors_id)
+            WHERE (n.metadata->>'fetchlogs_id')::int = %(fetchlogs_id)s
+            GROUP BY 1,2,3,4,5
+            ORDER BY 1,2,3,4
+        """,
+    },
+    "staged-systems": {
+        "title": "Staging sensor systems table",
+        "sql": """
+            SELECT *
+            FROM staging_sensorsystems s
+            WHERE s.fetchlogs_id = %(fetchlogs_id)s
+        """,
+    },
     "staged-sensors": {
         "title": "Sensors in staging for this fetchlog",
         "sql": """
@@ -166,7 +230,8 @@ QUERIES = {
     "sources-added-count": {
         "title": "Count of nodes added per source (this fetchlog)",
         "sql": """
-            SELECT n.source_name, COUNT(*) AS added
+            SELECT n.source_name
+            , COUNT(*) AS added
             FROM sensor_nodes n
             JOIN staging_sensornodes s
               ON s.sensor_nodes_id = n.sensor_nodes_id
@@ -187,7 +252,7 @@ QUERIES = {
     """,
     },
     "rejects-missing-measurand": {
-        "title": "Sensors rejected because measurand didn't match measurands_map_view",
+        "title": "Sensors rejected because measurand didn't match active_measurands_view",
         "sql": """
         SELECT r->>'ingest_id' AS ingest_id,
                r->>'measurand' AS measurand,
@@ -302,6 +367,31 @@ QUERIES = {
         LIMIT 50
     """,
     },
+    "staged-summary": {
+        "title":"Objects by source. Provided as counts by unique keys/ids",
+        "sql":"""
+        WITH summary_counts AS (
+        SELECT source_name
+        , COUNT(DISTINCT n.ingest_id) as node_keys
+        , COUNT(DISTINCT y.ingest_id) as system_keys
+        , COUNT(DISTINCT s.ingest_id) as sensor_keys
+        , COUNT(DISTINCT n.sensor_nodes_id) as node_ids
+        , COUNT(DISTINCT y2.sensor_systems_id) as system_ids
+        , COUNT(DISTINCT s2.sensors_id) as sensor_ids
+        FROM staging_sensornodes n
+        LEFT JOIN staging_sensorsystems y ON (y.ingest_sensor_nodes_id = n.ingest_id)
+        LEFT JOIN staging_sensors s ON (s.ingest_sensor_systems_id = y.ingest_id)
+        LEFT JOIN staging_sensorsystems y2 ON (y2.sensor_nodes_id = n.sensor_nodes_id)
+        LEFT JOIN staging_sensors s2 ON (s2.sensor_systems_id = y2.sensor_systems_id)
+        GROUP BY 1
+        )
+        SELECT source_name
+        , node_keys::text||'/'||node_ids::text as nodes
+        , system_keys::text||'/'||system_ids::text as systems
+        , sensor_keys::text||'/'||sensor_ids::text as sensors
+        FROM summary_counts
+        """,
+    },
     "sensor-unit-summary": {
         "title": "Sensor units grouped by measurand (spot outliers)",
         "sql": """
@@ -311,6 +401,36 @@ QUERIES = {
         GROUP BY measurand, units
         ORDER BY measurand, n DESC
     """,
+    },
+    "instrument-key-summary": {
+        "title": "Instrument keys in staging for this fetchlog",
+        "sql": """
+            SELECT s.manufacturer_key
+            , s.model_key
+            , COUNT(1) as n
+            , COUNT(sensor_systems_id) as with_id
+            , SUM(is_new::int) as is_new
+            FROM staging_sensorsystems s
+            WHERE s.fetchlogs_id = %(fetchlogs_id)s
+            GROUP BY 1,2
+            ORDER BY 1,2
+        """,
+    },
+    "instrument-summary": {
+        "title": "Instruments linked in staging for this fetchlog",
+        "sql": """
+            SELECT i.instruments_id
+            , m.full_name as manufacturer
+            , i.label as model
+            , COUNT(sensor_systems_id) as with_id
+            , SUM(is_new::int) as is_new
+            FROM staging_sensorsystems s
+            JOIN instruments i ON (i.ingest_id = s.instrument_ingest_id)
+            JOIN entities m ON (i.manufacturer_entities_id = m.entities_id)
+            WHERE s.fetchlogs_id = %(fetchlogs_id)s
+            GROUP BY 1,2,3
+            ORDER BY 2,3
+        """,
     },
     "measurement-unit-summary": {
         "title": "Measurement units grouped by measurand (compare to sensors above)",
@@ -508,10 +628,21 @@ QUERIES = {
 
 PACKS = {
     "summary": [
-        "staged-nodes",
-        "sources-added-count",
+        "staged-summary",
+        "added-summary",
         "sensor-unit-summary",
+        "instrument-summary",
         "rejects-by-reason",
+    ],
+    "staged": [
+        "staged-nodes",
+        "staged-systems",
+        "staged-sensors",
+        "staged-measurements",
+    ],
+    "instruments": [
+        "instrument-key-summary",
+        "instrument-summary",
     ],
     "matching": [
         "unmatched-nodes",

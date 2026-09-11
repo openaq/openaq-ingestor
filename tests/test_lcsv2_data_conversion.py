@@ -38,7 +38,7 @@ class TestIngestClientIntegration:
         assert len(client.measurements) == 1
         assert len(client.systems) == 1, "System was not added"
         assert len(client.sensors) == 1, "Sensor was not added"
-        assert client.measurements[0][5] == 0.002 ## not converted yet
+        assert client.measurements[0][6] == 0.002 ## not converted yet
 
         client.dump(load=True)
 
@@ -104,7 +104,7 @@ class TestIngestClientIntegration:
         assert len(client.measurements) == 1
         assert len(client.systems) == 1, "System was not added"
         assert len(client.sensors) == 1, "Sensor was not added"
-        assert client.measurements[0][5] == 0.002 ## not converted yet
+        assert client.measurements[0][6] == 0.002 ## not converted yet
 
         client.dump(load=True)
 

@@ -304,10 +304,11 @@ class TestAddMeasurement:
         print(measurement)
         assert measurement[0] == 'clarity-station001-pm25'  # ingest_id
         assert measurement[1] == 'clarity'  # source_name
-        assert measurement[2] == 'station001'  # source_id
-        assert measurement[3] == 'pm25'  # measurand
-        assert measurement[4] is None  # units
-        assert measurement[5] == 15.5  # value
+        assert measurement[2] == 'station001'  # node_source_id
+        assert measurement[3] == 'station001'  # system_source_id
+        assert measurement[4] == 'pm25'  # measurand
+        assert measurement[5] is None  # units
+        assert measurement[6] == 15.5  # value
 
     def test_add_measurement_from_csv_list_valid(self):
         """Test adding measurement from CSV list format."""
@@ -324,8 +325,9 @@ class TestAddMeasurement:
         assert measurement[0] == 'provider-location-no2'
         assert measurement[1] == 'provider'
         assert measurement[2] == 'location'
-        assert measurement[3] == 'no2'
-        assert measurement[5] == '25.3'
+        assert measurement[3] == 'location'
+        assert measurement[4] == 'no2'
+        assert measurement[6] == '25.3'
 
     def test_add_measurement_from_csv_with_coordinates(self):
         """Test adding measurement from CSV with lat/lon."""
@@ -339,8 +341,8 @@ class TestAddMeasurement:
 
         assert len(client.measurements) == 1
         measurement = client.measurements[0]
-        assert measurement[7] == '40.7128'  # lat
-        assert measurement[8] == '-74.0060'  # lon
+        assert measurement[8] == '40.7128'  # lat
+        assert measurement[9] == '-74.0060'  # lon
 
     def test_add_measurement_csv_too_short_skipped(self):
         """Test that CSV list with <3 elements is skipped."""
@@ -432,10 +434,11 @@ class TestAddMeasurement:
 
         assert len(client.measurements) == 1
         measurement = client.measurements[0]
+
         assert measurement[0] == 'provider-abc-def-ghi-pm25'
         assert measurement[1] == 'provider'
         assert measurement[2] == 'abc-def-ghi'  # multi-part source_id
-        assert measurement[3] == 'pm25'
+        assert measurement[4] == 'pm25'
 
     def test_add_measurement_optional_coordinates(self):
         """Test measurement with optional lat/lon coordinates."""
@@ -454,8 +457,8 @@ class TestAddMeasurement:
 
         assert len(client.measurements) == 1
         measurement = client.measurements[0]
-        assert measurement[7] == -74.0060  # lon
-        assert measurement[8] == 40.7128  # lat
+        assert measurement[8] == -74.0060  # lon
+        assert measurement[9] == 40.7128  # lat
 
 
 class TestAddNode:

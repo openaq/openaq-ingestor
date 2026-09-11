@@ -134,7 +134,7 @@ SELECT site_name
 , source_name
 , ismobile
 , geom
-, metadata
+, metadata || jsonb_build_object('fetchlogs_id', fetchlogs_id, 'added-from', 'process-nodes')
 , source_id
 , timezones_id
 -- default to the unknown provider
@@ -197,19 +197,20 @@ FROM r;
 --------------------
 
 
--- make sure that we have a system entry for every ingest_id
--- this is to deal with fetchers that do not add these data
-INSERT INTO staging_sensorsystems (sensor_nodes_id, ingest_id, fetchlogs_id, metadata)
-SELECT sensor_nodes_id
---, source_id -- the ingest_id has the source_name in it and we dont need/want that
-, ingest_id
-, fetchlogs_id
-, '{"note":"automatically added for sensor node"}'
-FROM staging_sensornodes
-WHERE is_new AND ingest_id NOT IN (SELECT ingest_sensor_nodes_id FROM staging_sensorsystems)
-ON CONFLICT (ingest_id) DO UPDATE
-  SET sensor_nodes_id = EXCLUDED.sensor_nodes_id
-  ;
+-- -- make sure that we have a system entry for every ingest_id
+-- -- this is to deal with fetchers that do not add these data
+-- -- however, for transoform we dont want to do this because it can create empty systems
+-- INSERT INTO staging_sensorsystems (sensor_nodes_id, ingest_id, fetchlogs_id, metadata)
+-- SELECT sensor_nodes_id
+-- --, source_id -- the ingest_id has the source_name in it and we dont need/want that
+-- , ingest_id
+-- , fetchlogs_id
+-- , '{"note":"automatically added for sensor node"}'
+-- FROM staging_sensornodes
+-- WHERE is_new AND ingest_id NOT IN (SELECT ingest_sensor_nodes_id FROM staging_sensorsystems)
+-- ON CONFLICT (ingest_id) DO UPDATE
+--   SET sensor_nodes_id = EXCLUDED.sensor_nodes_id
+--   ;
 
 -- Now match the sensor nodes to the system
 UPDATE staging_sensorsystems
@@ -242,6 +243,26 @@ RETURNING 1)
 SELECT COUNT(1) INTO __rejected_systems
 FROM r;
 
+-- add any missing sensors
+  -- the goal is to only add what we need and do it before we need it
+INSERT INTO entities (full_name, ingest_id, entity_type)
+SELECT DISTINCT manufacturer_key
+  , manufacturer_key
+  , 'Organization'::entity_type
+FROM staging_sensorsystems
+WHERE manufacturer_key IS NOT NULL
+ON CONFLICT DO NOTHING;
+-- and the instruments
+INSERT INTO instruments (manufacturer_entities_id, label, description, is_monitor, ingest_id)
+SELECT DISTINCT e.entities_id
+  , s.model_key
+  , 'Added automatically during ingest'
+  , 'f'::boolean
+  , s.instrument_ingest_id
+FROM staging_sensorsystems s
+JOIN entities e ON s.manufacturer_key = e.ingest_id
+ON CONFLICT DO NOTHING;
+
 
 UPDATE sensor_systems p
   SET source_id = s.ingest_id
@@ -267,7 +288,7 @@ FROM staging_sensorsystems s
 LEFT JOIN instruments i ON (s.instrument_ingest_id = i.ingest_id)
 WHERE sensor_nodes_id IS NOT NULL
   AND sensor_systems_id IS NULL
-GROUP BY sensor_nodes_id, s.ingest_id, instruments_id, metadata
+GROUP BY sensor_nodes_id, s.ingest_id, i.instruments_id, metadata
   ON CONFLICT DO NOTHING;
 
 -- ON CONFLICT (sensor_nodes_id, source_id) DO UPDATE SET
@@ -310,7 +331,6 @@ FROM r;
  -- We do not want to create default sensors because we are not dealling with measurements here
 UPDATE staging_sensors
 SET sensor_systems_id = staging_sensorsystems.sensor_systems_id
-  , is_new = FALSE
 FROM staging_sensorsystems
 WHERE staging_sensors.ingest_sensor_systems_id = staging_sensorsystems.ingest_id;
 
@@ -349,7 +369,7 @@ UPDATE staging_sensors
 -- Then apply the new way
 UPDATE staging_sensors
 SET measurands_id = m.measurands_id
-FROM (SELECT key,  measurands_id FROM measurands_map_view) as m
+FROM (SELECT key,  measurands_id FROM active_measurands_view) as m
 WHERE staging_sensors.measurand=m.key
   AND staging_sensors.measurands_id IS NULL;
 
@@ -363,17 +383,21 @@ AND (p.source_id = s.ingest_id
    OR (p.source_id = p.sensors_id::text AND p.measurands_id = s.measurands_id));
 
 
-WITH r AS (
-INSERT INTO rejects (t, tbl,r,fetchlogs_id)
-SELECT
- now()
-, 'staging_sensors-missing-measurands-id'
-, to_jsonb(staging_sensors)
-, fetchlogs_id
-FROM staging_sensors
-WHERE measurands_id IS NULL
-RETURNING 1)
-SELECT COUNT(1) INTO __rejected_measurands
+
+WITH deleted AS (
+  DELETE FROM staging_sensors
+  WHERE measurands_id IS NULL
+  RETURNING *
+), r AS (
+  INSERT INTO rejects (t, tbl, r, fetchlogs_id)
+  SELECT now(),
+         'staging_sensors-missing-measurands-id',
+         to_jsonb(deleted),
+         fetchlogs_id
+  FROM deleted
+  RETURNING 1
+)
+SELECT COUNT(*) INTO __rejected_sensors
 FROM r;
 
 
@@ -445,18 +469,23 @@ WHERE staging_sensors.sensors_id IS NULL
   AND sensors.source_id = staging_sensors.ingest_id;
 
 
-WITH r AS (
-INSERT INTO rejects (t,tbl,r,fetchlogs_id)
-SELECT
-  now()
-  , 'staging_sensors-missing-sensors-id'
-  , to_jsonb(staging_sensors)
-  , fetchlogs_id
-FROM staging_sensors
-WHERE sensors_id IS NULL
-RETURNING 1)
-SELECT COUNT(1) INTO __rejected_sensors
+WITH deleted AS (
+  DELETE FROM staging_sensors
+  WHERE sensors_id IS NULL
+  RETURNING *
+), r AS (
+  INSERT INTO rejects (t, tbl, r, fetchlogs_id)
+  SELECT now(),
+         'staging_sensors-missing-sensors-id',
+         to_jsonb(deleted),
+         fetchlogs_id
+  FROM deleted
+  RETURNING 1
+)
+SELECT COUNT(*) INTO __rejected_sensors
 FROM r;
+
+
 
 -- update the period so that we dont have to keep doing it later
 -- we could do this on import as well if we feel this is slowing us down
