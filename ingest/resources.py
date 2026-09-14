@@ -93,6 +93,11 @@ class Resources:
         if self._connection and self._owns_connection:
             self._connection.commit()
 
+    def rollback(self):
+        """Roll back transaction if we own the connection."""
+        if self._connection and self._owns_connection:
+            self._connection.rollback()
+
     def close(self):
         """Close connection if we own it."""
         if self._connection and self._owns_connection:

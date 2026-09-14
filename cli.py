@@ -55,7 +55,7 @@ from ingest.utils import (
 )
 
 
-logger = logging.getLogger('ingest')
+logger = logging.getLogger('CLI')
 
 
 # ---------------------------------------------------------------------------
@@ -150,14 +150,18 @@ def resolve_keys(args, *, connection=None) -> list:
     from ingest.settings import settings
 
     if args.id is not None:
+        logger.debug(f'Resolving by id - {args.id}')
         return resolve_by_id(args.id, connection=connection)
     if args.batch is not None:
+        logger.debug(f'Resolving by batch - {args.batch}/{args.limit}')
         return resolve_by_batch(args.batch, limit=args.limit,
                                 connection=connection)
     if args.pattern is not None:
+        logger.debug(f'Resolving by pattern - {args.pattern}/{args.limit}')
         return resolve_by_pattern(args.pattern, limit=args.limit,
                                   connection=connection)
     if args.s3_prefix is not None:
+        logger.debug(f'Resolving by prefix - {args.prefix}/{args.limit}')
         return resolve_by_prefix(
             args.bucket or settings.FETCH_BUCKET,
             args.s3_prefix,
@@ -165,8 +169,10 @@ def resolve_keys(args, *, connection=None) -> list:
             connection=connection,
         )
     if args.from_file is not None:
+        logger.debug(f'Resolving from file')
         return resolve_from_file(args.from_file, connection=connection)
     if args.keys:
+        logger.debug(f'Resolving by keys - {connection is not None}')
         return resolve_by_keys(args.keys, connection=connection)
     raise ValueError("no key selector provided")
 
@@ -192,10 +198,11 @@ def cmd_download(rows, output_path):
         download_from_location(path, output_path or None)
 
 
-def cmd_process(rows, args):
+def cmd_process(rows, args, connection = None):
     """Process rows through IngestClient."""
-    connection = psycopg2.connect(_target_dsn())
-    connection.set_session(autocommit=False)
+    if connection is None:
+        connection = _target_connection()
+
     resources = Resources(connection=connection)
 
     try:
@@ -216,7 +223,6 @@ def cmd_process(rows, args):
 def process_one(row, resources, args) -> dict:
     """Process one fetchlog row. Returns stats dict."""
     fetchlogs_id, key, last_modified = row
-    connection = resources.get_connection(autocommit=False)
 
     result = {
         "fetchlogs_id": fetchlogs_id,
@@ -235,28 +241,29 @@ def process_one(row, resources, args) -> dict:
             _print_client_summary(client)
             result.update(client.summary())
             result["elapsed_sec"] = round(time() - start, 3)
-            connection.rollback()
+            resources.rollback()
             return result
 
         client.dump_locations(load=not args.stage_only)
         client.dump_measurements(load=not args.stage_only)
+        conn = resources.connection
 
         #[print(x) for x in client.systems.values()]
         # Stats before commit/rollback (staging still visible).
         elapsed = round(time() - start, 3)
-        result.update(client.stats(connection, elapsed))
+        result.update(client.stats(conn, elapsed))
 
         # Diagnostics also before commit/rollback.
         if args.diagnose:
-            run_diagnostics(connection, fetchlogs_id, args)
+            run_diagnostics(conn, fetchlogs_id, args)
 
         if args.commit:
-            connection.commit()
+            resources.commit()
         else:
-            connection.rollback()
+            resources.rollback()
 
     except Exception as e:
-        connection.rollback()
+        resources.rollback()
         result["status"] = "error"
         result["error"] = str(e)
         result["elapsed_sec"] = round(time() - start, 3)
@@ -382,10 +389,13 @@ def write_csv_report(results, path):
 # Environment
 # ---------------------------------------------------------------------------
 
-def _target_dsn():
+def _target_connection():
     """DSN for the ingest target (always the local/dev DB)."""
     from ingest.settings import settings
-    return settings.DATABASE_WRITE_URL
+    _target_dsn = settings.DATABASE_WRITE_URL
+    conn = psycopg2.connect(_target_dsn)
+    conn.set_session(autocommit=False)
+    return conn
 
 
 def _source_connection(args):
@@ -427,12 +437,13 @@ def main():
         settings.FETCH_BUCKET = args.bucket
         logger.info(f"Using bucket override: {args.bucket}")
 
-    source_conn = _source_connection(args)
+    conn = _source_connection(args) if args.source_db else _target_connection()
+
     try:
-        rows = resolve_keys(args, connection=source_conn)
+        rows = resolve_keys(args, connection=conn)
     finally:
-        if source_conn is not None:
-            source_conn.close()
+        if args.source_db and conn is not None:
+            conn.close()
 
     if not rows:
         logger.warning("No keys resolved")
@@ -445,7 +456,12 @@ def main():
     elif args.download is not None:
         cmd_download(rows, args.download)
     else:
-        cmd_process(rows, args)
+        cmd_process(rows, args, conn)
+
+    if args.commit:
+        conn.commit()
+    else:
+        conn.rollback()
 
 
 if __name__ == '__main__':

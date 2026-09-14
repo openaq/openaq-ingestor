@@ -148,7 +148,7 @@ INSERT INTO sensor_nodes (
 SELECT source_name
 , source_name
 , node_source_id
-, jsonb_build_object('fetchlogs_id', MIN(fetchlogs_id), 'added-from', 'measurements')
+, jsonb_added('fetchlogs_id', MIN(fetchlogs_id), 'process-measurements')
 FROM staging_measurements
 WHERE sensors_id IS NULL
 GROUP BY 1,2,3
@@ -174,14 +174,21 @@ WITH sen AS (
   , source_name
   , node_source_id as source_id
   , measurand as parameter
+  , fetchlogs_id
   FROM staging_measurements
   WHERE sensors_id IS NULL
-  GROUP BY 1,2,3,4
+  GROUP BY 1,2,3,4,5
 ), inserts AS (
-INSERT INTO sensors (sensor_systems_id, measurands_id, source_id)
+INSERT INTO sensors (
+  sensor_systems_id
+  , measurands_id
+  , source_id
+  , metadata
+  )
 SELECT sy.sensor_systems_id
 , m.measurands_id
 , ingest_id
+  , jsonb_added('fetchlogs_id', fetchlogs_id, 'process-measurements')
 FROM sen s
 JOIN active_measurands_view m ON (s.parameter = m.key)
 JOIN sensor_nodes n ON (s.source_name = n.source_name AND s.source_id = n.source_id)
@@ -345,12 +352,12 @@ WITH flagged_measurements AS (
 
 
  -- add the new flags to the flag table
-INSERT INTO flags (flag_types_id, sensor_nodes_id, sensors_ids, period, note)
+INSERT INTO flags (flag_types_id, sensor_nodes_id, sensors_ids, period, metadata)
   SELECT flag_types_id
   , sensor_nodes_id
   , ARRAY[sensors_id]
   , period
-  , 'Added as part of ingestion'
+    , jsonb_added('fetchlogs_id', fetchlogs_id, 'process-measurements')
   FROM staging_flags
   WHERE flag_types_id IS NOT NULL
   AND sensor_nodes_id IS NOT NULL
@@ -362,6 +369,7 @@ INSERT INTO flags (flag_types_id, sensor_nodes_id, sensors_ids, period, note)
   SET period = sf.period + fm.period
   , note = COALESCE(sf.note, fm.note)
   , modified_on = now()
+  , metadata = sf.metadata || jsonb_modified('fetchlogs_id', fetchlogs_id, 'process-measurements')
   FROM staging_flags sf
   WHERE sf.flags_id = fm.flags_id;
 

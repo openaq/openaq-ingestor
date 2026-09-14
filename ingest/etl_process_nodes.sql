@@ -35,23 +35,39 @@ WHERE units IN ('µg/m��','��g/m³', 'ug/m3');
 
 
 -- now update them using the source + spatial method
-UPDATE staging_sensornodes
-SET sensor_nodes_id = s.sensor_nodes_id
-, timezones_id = s.timezones_id
-, countries_id = s.countries_id
-, is_new = false
---, is_moved = st_astext(s.geom) != st_astext(staging_sensornodes.geom)
-FROM sensor_nodes s
-JOIN providers p ON (s.providers_id = p.providers_id)
-WHERE s.source_name = staging_sensornodes.source_name
-AND st_distance(staging_sensornodes.geom, s.geom) <= p.spatial_match_tolerance
-AND (
-  staging_sensornodes.source_id IS NULL
-  OR s.source_id IS NULL
-  OR s.source_id = s.sensor_nodes_id::text
-  OR s.source_id = staging_sensornodes.source_id
-  )
-;
+-- makeing sure to only pick one match for all nodes
+UPDATE staging_sensornodes sn
+SET sensor_nodes_id = best.sensor_nodes_id
+  , timezones_id = best.timezones_id
+  , countries_id = best.countries_id
+  , is_new = false
+FROM (
+    SELECT DISTINCT ON (sn.ingest_id)
+           sn.ingest_id,
+           s.sensor_nodes_id,
+           s.timezones_id,
+           s.countries_id
+    FROM staging_sensornodes sn
+    JOIN sensor_nodes s ON s.source_name = sn.source_name
+    JOIN providers p ON s.providers_id = p.providers_id
+    WHERE ST_DWithin(sn.geom, s.geom, 0.0002) -- -- Cheap prefliter
+    AND st_distance(sn.geom::geography, s.geom::geography) <= 20 -- Exact check only on candidates
+      AND (
+        sn.source_id IS NULL
+        OR s.source_id IS NULL
+        OR s.source_id = s.sensor_nodes_id::text
+        OR s.source_id = sn.source_id
+      )
+    ORDER BY sn.ingest_id,
+             -- Rank 1: real source_id on both sides that match exactly
+             (sn.source_id IS NOT NULL
+              AND s.source_id IS NOT NULL
+              AND s.source_id != s.sensor_nodes_id::text
+              AND s.source_id = sn.source_id) DESC,
+             -- Rank 2: closest spatial match
+             st_distance(sn.geom, s.geom) ASC
+) best
+  WHERE sn.ingest_id = best.ingest_id;
 
 -- only update the nodes where the geom has changed
 -- the per row geom queries are really slow so we dont want to be doing that all the time
@@ -97,7 +113,7 @@ SET source_id = COALESCE(s.source_id, sensor_nodes.source_id)
   , timezones_id = COALESCE(s.timezones_id, sensor_nodes.timezones_id)
   , countries_id = COALESCE(s.countries_id, sensor_nodes.countries_id)
   , ismobile = COALESCE(s.ismobile, sensor_nodes.ismobile)
-  , metadata = COALESCE(s.metadata, '{}') || COALESCE(sensor_nodes.metadata, '{}')
+  , metadata = sensor_nodes.metadata || jsonb_modified('fetchlogs_id', fetchlogs_id, 'process-nodes')
   , modified_on = clock_timestamp()
 FROM staging_sensornodes s
 WHERE sensor_nodes.sensor_nodes_id = s.sensor_nodes_id
@@ -134,7 +150,7 @@ SELECT site_name
 , source_name
 , ismobile
 , geom
-, metadata || jsonb_build_object('fetchlogs_id', fetchlogs_id, 'added-from', 'process-nodes')
+, metadata || jsonb_added('fetchlogs_id', fetchlogs_id, 'process-nodes')
 , source_id
 , timezones_id
 -- default to the unknown provider
@@ -245,20 +261,22 @@ FROM r;
 
 -- add any missing sensors
   -- the goal is to only add what we need and do it before we need it
-INSERT INTO entities (full_name, ingest_id, entity_type)
+INSERT INTO entities (full_name, ingest_id, entity_type, metadata)
 SELECT DISTINCT manufacturer_key
   , manufacturer_key
   , 'Organization'::entity_type
+  , jsonb_added('fetchlogs_id', fetchlogs_id, 'process-nodes')
 FROM staging_sensorsystems
 WHERE manufacturer_key IS NOT NULL
 ON CONFLICT DO NOTHING;
 -- and the instruments
-INSERT INTO instruments (manufacturer_entities_id, label, description, is_monitor, ingest_id)
+INSERT INTO instruments (manufacturer_entities_id, label, description, is_monitor, ingest_id, metadata)
 SELECT DISTINCT e.entities_id
   , s.model_key
   , 'Added automatically during ingest'
   , 'f'::boolean
   , s.instrument_ingest_id
+  , jsonb_added('fetchlogs_id', fetchlogs_id, 'process-nodes')
 FROM staging_sensorsystems s
 JOIN entities e ON s.manufacturer_key = e.ingest_id
 ON CONFLICT DO NOTHING;
@@ -268,6 +286,7 @@ UPDATE sensor_systems p
   SET source_id = s.ingest_id
   , instruments_id = i.instruments_id
   , modified_on = now()
+  , metadata = p.metadata || jsonb_modified('fetchlogs_id', fetchlogs_id, 'process-nodes')
   FROM staging_sensorsystems s
   LEFT JOIN instruments i ON (s.instrument_ingest_id = i.ingest_id)
   WHERE p.sensor_systems_id = s.sensor_systems_id
@@ -277,18 +296,18 @@ UPDATE sensor_systems p
     (p.instruments_id IS NULL AND i.instruments_id IS NOT NULL OR p.instruments_id != i.instruments_id)
   );
 
--- And finally we add/update the sensor systems
+-- And finally we add the sensor systems
 --- FIX ME -- split up the add and update part of this
 INSERT INTO sensor_systems (sensor_nodes_id, source_id, instruments_id, metadata)
 SELECT sensor_nodes_id
 , s.ingest_id
 , i.instruments_id
-, metadata
+, s.metadata || jsonb_added('fetchlogs_id', fetchlogs_id, 'process-nodes')
 FROM staging_sensorsystems s
 LEFT JOIN instruments i ON (s.instrument_ingest_id = i.ingest_id)
 WHERE sensor_nodes_id IS NOT NULL
   AND sensor_systems_id IS NULL
-GROUP BY sensor_nodes_id, s.ingest_id, i.instruments_id, metadata
+GROUP BY sensor_nodes_id, s.ingest_id, i.instruments_id, s.metadata, fetchlogs_id
   ON CONFLICT DO NOTHING;
 
 -- ON CONFLICT (sensor_nodes_id, source_id) DO UPDATE SET
@@ -334,6 +353,7 @@ SET sensor_systems_id = staging_sensorsystems.sensor_systems_id
 FROM staging_sensorsystems
 WHERE staging_sensors.ingest_sensor_systems_id = staging_sensorsystems.ingest_id;
 
+
 WITH r AS (
 INSERT INTO rejects (t,tbl,r,fetchlogs_id)
 SELECT
@@ -376,6 +396,7 @@ WHERE staging_sensors.measurand=m.key
 
 UPDATE staging_sensors s
 SET sensors_id = p.sensors_id
+  , is_new = 'f'::boolean
 FROM sensors p
 WHERE p.sensor_systems_id = s.sensor_systems_id
 AND (p.source_id = s.ingest_id
@@ -409,14 +430,15 @@ INSERT INTO sensors (
 , data_logging_period_seconds
 , data_averaging_period_seconds
 , sensor_statuses_id
-, metadata)
+, metadata
+  )
 SELECT ingest_id
 , sensor_systems_id
 , measurands_id
 , logging_interval_seconds
 , averaging_interval_seconds
 , COALESCE(ss.sensor_statuses_id, 1)
-, metadata
+, s.metadata || jsonb_added('fetchlogs_id', fetchlogs_id, 'process-nodes')
 FROM staging_sensors s
 LEFT JOIN sensor_statuses ss ON (ss.short_code = s.status)
 WHERE measurands_id is not null
@@ -428,24 +450,9 @@ GROUP BY ingest_id
 , logging_interval_seconds
 , averaging_interval_seconds
 , ss.sensor_statuses_id
-, metadata
---ON CONFLICT DO NOTHING
--- ON CONFLICT (sensor_systems_id, measurands_id, source_id) DO UPDATE
---  SET metadata = COALESCE(sensors.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}')
---   -- in a situation where we have limited data updating an existing record we need to be careful we dont overwrite anything
---   , data_logging_period_seconds = COALESCE(EXCLUDED.data_logging_period_seconds, sensors.data_logging_period_seconds)
---   , data_averaging_period_seconds = COALESCE(EXCLUDED.data_averaging_period_seconds, sensors.data_averaging_period_seconds)
---   , sensor_statuses_id = COALESCE(EXCLUDED.sensor_statuses_id, sensors.sensor_statuses_id)
---   , modified_on = clock_timestamp()
---  WHERE COALESCE(EXCLUDED.data_logging_period_seconds, sensors.data_logging_period_seconds)
---          IS DISTINCT FROM sensors.data_logging_period_seconds
---     OR COALESCE(EXCLUDED.data_averaging_period_seconds, sensors.data_averaging_period_seconds)
---          IS DISTINCT FROM sensors.data_averaging_period_seconds
---     OR COALESCE(EXCLUDED.sensor_statuses_id, sensors.sensor_statuses_id)
---          IS DISTINCT FROM sensors.sensor_statuses_id
---     --OR (COALESCE(sensors.metadata, '{}') || COALESCE(EXCLUDED.metadata, '{}'))
---     --     IS DISTINCT FROM sensors.metadata
-    RETURNING 1)
+, s.metadata
+, fetchlogs_id
+RETURNING 1)
 SELECT COUNT(1) INTO __inserted_sensors
 FROM inserts;
 
@@ -453,6 +460,8 @@ FROM inserts;
   --- Update any that need to be updated
   UPDATE sensors
   SET source_id = s.ingest_id
+  , metadata = sensors.metadata || jsonb_modified('fetchlogs_id', fetchlogs_id, 'process-nodes')
+  , modified_on = now()
   FROM staging_sensors s
   WHERE sensors.sensors_id = s.sensors_id
   AND (
@@ -531,12 +540,13 @@ UPDATE staging_flags sf
   );
 
 -- and finally we will insert the new flags
-INSERT INTO flags (flag_types_id, sensor_nodes_id, sensors_ids, period, note)
+INSERT INTO flags (flag_types_id, sensor_nodes_id, sensors_ids, period, note, metadata)
   SELECT flag_types_id
   , sensor_nodes_id
   , CASE WHEN sensors_id IS NOT NULL THEN ARRAY[sensors_id] ELSE NULL END
   , period
   , note
+  , metadata || jsonb_added('fetchlogs_id', fetchlogs_id, 'process-nodes')
   FROM staging_flags
   WHERE flag_types_id IS NOT NULL
   AND sensor_nodes_id IS NOT NULL
@@ -547,6 +557,7 @@ INSERT INTO flags (flag_types_id, sensor_nodes_id, sensors_ids, period, note)
  UPDATE flags fm
   SET period = sf.period + fm.period
   , note = sf.note
+  , metadata = fm.metadata || jsonb_modified('fetchlogs_id', fetchlogs_id, 'process-nodes')
   , modified_on = clock_timestamp()
   FROM staging_flags sf
   WHERE sf.flags_id = fm.flags_id;

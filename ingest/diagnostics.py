@@ -23,14 +23,16 @@ QUERIES = {
         """,
     },
     "added-summary": {
-        "title": "Nodes added for this fetchlog",
+        "title": "Summary of Nodes added (not matched) for this fetchlog",
         "sql": """
             SELECT source_name
-            , n.metadata->>'added-from' as from
+            , n.metadata#>'{added_by,reason}' as from
             , COUNT(DISTINCT n.sensor_nodes_id) as nodes
             , COUNT(DISTINCT y.sensor_systems_id) as systems
             , COUNT(DISTINCT s.sensors_id) as sensors
             , COUNT(datetime) as measurements
+            , MIN(datetime) as first
+            , MAX(datetime) as last
             FROM sensor_nodes n
             LEFT JOIN sensor_systems y ON (n.sensor_nodes_id = y.sensor_nodes_id)
             LEFT JOIN sensors s ON (y.sensor_systems_id = s.sensor_systems_id)
@@ -58,11 +60,15 @@ QUERIES = {
         """,
     },
     "ingested-summary": {
-        "title": "Data ingested for this fetchlog",
+        "title": "Data ingested for this fetchlog. Measurements are provided as\ntotal/inserted and the rest are added/matched",
         "sql": """
-            SELECT MIN(datetime) as first
-            , MAX(datetime) as last
-            , COUNT(datetime)
+           WITH ingested AS (
+            SELECT MIN(m.datetime) as first_record
+            , MAX(m.datetime) as last_record
+            , MIN(m2.datetime) as first_inserted
+            , MAX(m2.datetime) as last_inserted
+            , COUNT(m.datetime) as records
+            , COUNT(m2.datetime) as inserted
             , COUNT(DISTINCT s.ingest_id) FILTER (WHERE s.is_new) as sensors_a
             , COUNT(DISTINCT s.ingest_id) FILTER (WHERE NOT s.is_new) as sensors_m
             , COUNT(DISTINCT y.ingest_id) FILTER (WHERE y.is_new) as systems_a
@@ -73,15 +79,24 @@ QUERIES = {
             LEFT JOIN staging_sensorsystems y ON (n.sensor_nodes_id = y.sensor_nodes_id)
             LEFT JOIN staging_sensors s ON (y.sensor_systems_id = s.sensor_systems_id)
             LEFT JOIN staging_measurements m ON (s.sensors_id = m.sensors_id)
+            LEFT JOIN staging_inserted_measurements m2 ON (m.sensors_id = m2.sensors_id AND m.datetime = m2.datetime)
             WHERE m.fetchlogs_id = %(fetchlogs_id)s
-            OR n.fetchlogs_id = %(fetchlogs_id)s
+            OR n.fetchlogs_id = %(fetchlogs_id)s)
+          SELECT format('%%s\n%%s\n%%s', first_record, last_record, age(last_record, first_record)) as recorded
+          , format('%%s\n%%s\n%%s', first_inserted, last_inserted, age(last_inserted, first_inserted)) as inserted
+          , format('%%s/%%s',records,inserted) as meas
+          , format('%%s/%%s',nodes_a,nodes_m) as nodes
+          , format('%%s/%%s',systems_a,systems_m) as systems
+          , format('%%s/%%s',sensors_a,sensors_m) as sensors
+          FROM ingested
         """,
     },
     "added-details": {
-        "title": "Nodes, systems and sensors",
+        "title": "Nodes, systems and sensors that were added (not matched).",
         "sql": """
             SELECT source_name
-            , n.metadata->>'added-from' as from
+            , n.metadata#>'{added_by,reason}' as from
+            , st_astext(geom) as coords
             , n.source_id as node_source_id
             , y.source_id as system_source_id
             , s.source_id as sensor_source_id
@@ -90,8 +105,9 @@ QUERIES = {
             LEFT JOIN sensor_systems y ON (n.sensor_nodes_id = y.sensor_nodes_id)
             LEFT JOIN sensors s ON (y.sensor_systems_id = s.sensor_systems_id)
             LEFT JOIN measurements m ON (s.sensors_id = m.sensors_id)
-            WHERE (n.metadata->>'fetchlogs_id')::int = %(fetchlogs_id)s
-            GROUP BY 1,2,3,4,5
+            --WHERE (n.metadata#>'{added_by,id}')::int = %(fetchlogs_id)s
+            WHERE n.added_on >= now() - '5sec'::interval
+            GROUP BY 1,2,3,4,5,6
             ORDER BY 1,2,3,4
         """,
     },
@@ -385,7 +401,7 @@ QUERIES = {
     """,
     },
     "staged-summary": {
-        "title":"Objects by source. Provided as counts by unique keys/ids",
+        "title":"Objects in staging by source. Provided as counts of unique ingest keys as well as unique ID's",
         "sql":"""
         WITH summary_counts AS (
         SELECT source_name
@@ -406,6 +422,7 @@ QUERIES = {
         , node_keys::text||'/'||node_ids::text as nodes
         , system_keys::text||'/'||system_ids::text as systems
         , sensor_keys::text||'/'||sensor_ids::text as sensors
+        , node_keys!=node_ids OR system_keys!=system_ids OR sensor_keys!=sensor_ids as issue
         FROM summary_counts
         """,
     },
@@ -647,10 +664,10 @@ PACKS = {
     "summary": [
         "staged-summary",
         "added-summary",
-        "ingested-summary",
-        "sensor-unit-summary",
         "instrument-summary",
         "rejects-by-reason",
+        "fetcher-response",
+        "ingested-summary",
     ],
     "staged": [
         "staged-nodes",

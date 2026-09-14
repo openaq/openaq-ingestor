@@ -498,7 +498,8 @@ class IngestClient:
         is_json = bool(re.search(r"\.json(.gz)?$", key))
         is_ndjson = bool(re.search(r"\.ndjson(.gz)?$", key))
         self.fetchlogs_id = fetchlogs_id
-
+        self.schema = None
+        self.delim = "-"
         # is it a local file? This is used for dev
         # but likely fine to leave in
         # logger.info(os.path.expanduser(key))
@@ -510,8 +511,6 @@ class IngestClient:
 
         if is_csv:
             # all csv data will be measurements
-            self.schema = None
-            self.delim = "-"
             for rw in csv.reader(content.split("\n")):
                 self.add_measurement(rw)
         elif is_ndjson:
@@ -520,8 +519,6 @@ class IngestClient:
             measures = []
             locations = []
             ingest_ids = []
-            self.schema = None
-            self.delim = "-"
             for idx, obj in enumerate(content.split('\n')):
                 try:
                     if obj != "":
@@ -529,9 +526,9 @@ class IngestClient:
                         ## this will be used as the node and system ingest id
                         coords = nd.get('coordinates', {})
                         if None in [coords.get('latitude'), coords.get('longitude')]:
-                            logger.debug('Missing coordinates')
+                            #logger.warning('Missing coordinates')
                             continue
-                        geo = geohash.encode(coords.get('latitude'), coords.get('longitude'), 9)
+                        geo = geohash.encode(coords.get('latitude'), coords.get('longitude'), 10)
                         source_id = nd.get("id", geo)
                         source_name = nd.get("sourceName")
                         ingest_id = self.delim.join([source_name, source_id])
@@ -615,7 +612,7 @@ class IngestClient:
             self.matching_method = meta.get('matching_method')
         if "schema" in meta.keys():
             self.schema = meta.get('schema')
-            if self.schema == "v0.1":
+            if self.schema == "v0.1" and "sourceName" in meta.keys():
                 self.delim = "/"
 
         self.insert_metadata(meta, errors)
@@ -668,7 +665,22 @@ class IngestClient:
                      4326
                  )
             END
-            );
+            ) ON CONFLICT (source_name, fetchlogs_id) DO UPDATE
+            SET message = EXCLUDED.message
+              , records = EXCLUDED.records
+              , locations = EXCLUDED.locations
+              , sensors = EXCLUDED.sensors
+              , systems = EXCLUDED.systems
+              , flags = EXCLUDED.flags
+              , started_on = EXCLUDED.started_on
+              , finished_on = EXCLUDED.finished_on
+              , exported_on = EXCLUDED.exported_on
+              , datetime_from = EXCLUDED.datetime_from
+              , datetime_to = EXCLUDED.datetime_to
+              , duration_seconds = EXCLUDED.duration_seconds
+              , errors = EXCLUDED.errors
+              , parameters = EXCLUDED.parameters
+              , boundary = EXCLUDED.boundary
             """
 
         data = meta.get("fetchSummary", {})
@@ -735,7 +747,7 @@ class IngestClient:
 
             sensor["ingest_id"] = id
 
-            logger.debug(f"Adding sensor {id}")
+            logger.log(VERBOSE_LEVEL, f"Adding sensor {id}")
             for key, value in s.items():
                 key = str.replace(key, "sensor_", "")
                 if key == "flags":
@@ -890,8 +902,7 @@ class IngestClient:
             if 'model_key' not in system.keys():
                 system['model_key'] = 'default'
 
-            logger.debug(f"Adding system {id}")
-
+            logger.log(VERBOSE_LEVEL, f"Adding system {id}")
             self.systems[id] = system
 
 
@@ -947,7 +958,7 @@ class IngestClient:
             # prevent adding the node more than once
             # this does not save processing time of course
             if ingest_id not in self.nodes:
-                logger.debug(f"Adding node {ingest_id} / {node.get('geom')}")
+                logger.log(VERBOSE_LEVEL, f"Adding node from system {ingest_id} / {node.get('geom')}")
                 node["metadata"] = orjson.dumps(metadata).decode()
                 self.nodes[ingest_id] = node
             # now look for systems
@@ -1054,7 +1065,7 @@ class IngestClient:
                     "averaging_interval_secs": node.get("averaging_interval_secs"),
                     "logging_interval_secs": node.get("logging_interval_secs")
                 }], node_ingest_id, fetchlogs_id)
-            logger.debug(f"Adding measurement: {source_name}|{system_source_id}|{measurand}|{units}")
+            logger.log(VERBOSE_LEVEL, f"Adding measurement: {source_name}|{system_source_id}|{measurand}|{units}")
             self.measurements.append([ingest_id, source_name, node_source_id, system_source_id, measurand, units, value, datetime, lon, lat, fetchlogs_id])
         else:
             logger.warning(f"Something was not set {[ingest_id, datetime, source_name, node_source_id, system_source_id, measurand]} - {ingest_arr} - {m}")
