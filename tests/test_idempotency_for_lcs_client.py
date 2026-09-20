@@ -255,10 +255,19 @@ def test_replay_is_idempotent(
     # ------- Pass 1: greenfield -------
     fl1 = make_fetchlog(f"replay-{source}-pass1")
     client1 = IngestClient(resources=ingest_resources, fetchlogs_id=fl1)
+    print(scenario["data"])
     client1.load(scenario["data"])
     client1.dump(load=True)
 
+    print(client1.sensors)
     snapshot_1 = _capture_state(get_object, source)
+
+    dump(get_object("staged_measurements", source_name=source), "staged measurements")
+    dump(get_object("staged_systems", source_name=source), "staged systems")
+    dump(get_object("staged_sensors", source_name=source), "staged sensors")
+    dump(get_object("nodes_by_source", source_name=source), "nodes")
+    dump(get_object("sensors_by_source", source_name=source), 'sensors')
+    dump(get_object("rejects", fetchlogs_id=fl1), 'rejects')
 
     assert len(snapshot_1["nodes"]) == expected["nodes"], (
         f"pass 1: wrong node count for {source}"

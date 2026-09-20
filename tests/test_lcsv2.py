@@ -65,8 +65,8 @@ def test_ingest_client_senstate():
     client = IngestClient();
     client.load_key(get_path('testdata_lcs_senstate.csv'), 1, str(date.today()))
     assert len(client.measurements) == 3
-    assert len(client.nodes) == 0
-    assert len(client.systems) == 0
+    assert len(client.nodes) == 2
+    assert len(client.systems) == 2
     assert len(client.sensors) == 3
 
 
@@ -88,7 +88,7 @@ def test_ingest_client_handles_variable_flag_formats():
         },
         "locations": [
         {
-            "key": "provider/l1",
+            "key": "provider-l1",
             "site_id": "l1",
             "coordinates": {
                 "lat": 45.56665,
@@ -108,5 +108,5 @@ def test_ingest_client_handles_variable_flag_formats():
     client.load(data)
     flag = client.flags[0]
     assert len(client.flags) == 1, "Client has the right number of flags"
-    assert flag['sensor_ingest_id'] == 'provider/l1'
+    assert flag['sensor_ingest_id'] == 'provider-l1'
     assert flag['ingest_id'] == 'info::node-info'

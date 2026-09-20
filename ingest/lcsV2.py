@@ -106,6 +106,10 @@ def to_geometry(key, data):
     # initialize for later checks
     lat = lon = None
 
+    if key == "sensor_node_geometry":
+        coords = data.get(key)
+        data = { "lon": coords[0], "lat": coords[1] }
+
     if key == 'coordinates':
         data = data.get(key)
         if data is None:
@@ -209,6 +213,9 @@ class IngestClient:
             "fetchlogs_id": {},
             "site_name": {},
             "source_name": {},
+            "sensor_node_source_name": {"col":"source_name"},
+            "sensor_node_ismobile": {"col":"ismobile"},
+            "sensor_node_geometry": {"col":"geom", "func": to_geometry },
             "source_id": {}, ## ADDED
             "site_id": { "col":"source_id" },
             "ismobile": {},
@@ -463,18 +470,20 @@ class IngestClient:
 
 
     def load(self, data = {}):
+
+        if "sensor_node_id" in data.keys():
+            logger.debug("loading lcs station format")
+            self.load_locations([data])
+            return
+
         if "meta" in data.keys():
-            logger.debug("loading metada")
             self.load_metadata(data.get('meta'), data.get('errors'))
         if "locations" in data.keys():
-            logger.debug("loading locations")
             self.load_locations(data.get('locations'))
         if "measures" in data.keys():
-            logger.debug("loading measurements")
             self.load_measurements(data.get('measures'))
         # transform is currently using the measurements key
         if "measurements" in data.keys():
-            logger.debug("loading measurements")
             self.load_measurements(data.get('measurements'))
 
 
@@ -531,8 +540,8 @@ class IngestClient:
                         geo = geohash.encode(coords.get('latitude'), coords.get('longitude'), 10)
                         source_id = nd.get("id", geo)
                         source_name = nd.get("sourceName")
-                        ingest_id = self.delim.join([source_name, source_id])
-                        sensor_ingest_id = self.delim.join([ingest_id, nd.get('parameter')])
+                        ingest_id = self.build_source_id([source_name, source_id])
+                        sensor_ingest_id = self.build_source_id([ingest_id, nd.get('parameter')])
                         interval_seconds = to_seconds('averagingPeriod', nd)
                         units = nd.get("unit", "")
                         parameter = f"{nd.get("parameter", "")}"
@@ -602,10 +611,12 @@ class IngestClient:
 
 
     def load_metadata(self, meta, errors):
+        logger.debug("loading metada")
         if "source" in meta.keys():
             self.source = meta.get('source')
         if "sourceName" in meta.keys():
             self.source = meta.get('sourceName')
+
         if "ingestMatchingMethod" in meta.keys():
             self.matching_method = meta.get('ingestMatchingMethod')
         if "matching_method" in meta.keys():
@@ -613,6 +624,7 @@ class IngestClient:
         if "schema" in meta.keys():
             self.schema = meta.get('schema')
             if self.schema == "v0.1" and "sourceName" in meta.keys():
+                self.schema = "transform"
                 self.delim = "/"
 
         self.insert_metadata(meta, errors)
@@ -685,7 +697,7 @@ class IngestClient:
 
         data = meta.get("fetchSummary", {})
         mdl = SourceResponse(
-            source_name = self.source or meta.get('sourceId'),
+            source_name = self.source or meta.get('sourceId') or f"fetchlog:{self.fetchlogs_id}",
             fetchlogs_id = self.fetchlogs_id,
             message = meta.get("schema","transform"),
             locations = data.get("locations"),
@@ -714,6 +726,7 @@ class IngestClient:
 
 
     def load_locations(self, locations):
+        logger.debug(f'Loading {len(locations)} locations')
         for loc in locations:
             self.add_node(loc)
 
@@ -722,6 +735,10 @@ class IngestClient:
         for meas in measurements:
             self.add_measurement(meas)
 
+
+    def build_source_id(self, arr):
+        # Join the non-None items in arr using the delim
+        return self.delim.join([a for a in arr if a is not None])
 
     def add_sensors(self, j, system_id, fetchlogsId):
         for s in j:
@@ -747,7 +764,6 @@ class IngestClient:
 
             sensor["ingest_id"] = id
 
-            logger.log(VERBOSE_LEVEL, f"Adding sensor {id}")
             for key, value in s.items():
                 key = str.replace(key, "sensor_", "")
                 if key == "flags":
@@ -774,7 +790,15 @@ class IngestClient:
                 sensor['measurand'] = ingest_arr[-1] # take the last one
             sensor["metadata"] = orjson.dumps(metadata).decode()
             if id not in self.sensors:
+                logger.debug(f'Adding sensor {id}{sensor}')
                 self.sensors[id] = sensor
+            ## required for measurement only csvs
+            system_key = sensor.get('ingest_sensor_systems_id')
+            if system_key not in self.systems.keys():
+                self.add_systems([{
+                    "key": system_key
+                }], system_key, fetchlogsId)
+
 
 
     def add_flags(self, flags, sensor_id, fetchlogsId, dt=None):
@@ -854,6 +878,7 @@ class IngestClient:
         for s in j:
             system = {}
             metadata = {}
+            sensors = []
             if "sensor_system_id" in s:
                 id = s.get("sensor_system_id")
             elif "system_id" in s:
@@ -882,7 +907,7 @@ class IngestClient:
             for key, value in s.items():
                 key = str.replace(key, "sensor_system_", "")
                 if key == "sensors":
-                    self.add_sensors(value, id, fetchlogsId)
+                    sensors = value #self.add_sensors(value, id, fetchlogsId)
                 elif key == 'manufacturer_name':
                     system['manufacturer_key'] = s.get('manufacturer_name')
                 elif key == 'model_name':
@@ -902,8 +927,20 @@ class IngestClient:
             if 'model_key' not in system.keys():
                 system['model_key'] = 'default'
 
-            logger.log(VERBOSE_LEVEL, f"Adding system {id}")
+            logger.debug(f"Adding system {id}")
             self.systems[id] = system
+
+            if len(sensors) > 0:
+                self.add_sensors(s.get("sensors"), id, fetchlogsId)
+
+            # required for measurement only csvs
+            node_key = system.get('ingest_sensor_nodes_id')
+            if node_key not in self.nodes.keys():
+                self.add_node({
+                    "key": node_key,
+                    "fetchlogs_id": fetchlogsId,
+                })
+
 
 
     def add_node(self, j):
@@ -945,7 +982,7 @@ class IngestClient:
             if node.get('source_id') is None:
                 if len(ingest_arr)>1:
                     # updated to handle uuid
-                    node['source_id'] = self.delim.join(ingest_arr[1:len(ingest_arr)])
+                    node['source_id'] = self.build_source_id(ingest_arr[1:len(ingest_arr)])
                 else:
                     node['source_id'] = ingest_arr[0]
 
@@ -960,15 +997,20 @@ class IngestClient:
             if ingest_id not in self.nodes:
                 logger.log(VERBOSE_LEVEL, f"Adding node from system {ingest_id} / {node.get('geom')}")
                 node["metadata"] = orjson.dumps(metadata).decode()
+                logger.debug(f'Adding node {ingest_id}')
                 self.nodes[ingest_id] = node
-            # now look for systems
+
+                # now look for systems
             if "sensor_system" in j.keys():
                 self.add_systems(j.get('sensor_system'), node.get('ingest_id'), node.get('fetchlogs_id'))
             elif "systems" in j.keys():
                 self.add_systems(j.get("systems"), node.get('ingest_id'), node.get('fetchlogs_id'))
+            elif "sensor_systems" in j.keys():
+                self.add_systems(j.get("sensor_systems"), node.get('ingest_id'), node.get('fetchlogs_id'))
             else:
-                # no systems
-                self.add_systems([{}], node.get('ingest_id'), node.get('fetchlogs_id'))
+                self.add_systems([{
+                    "key": ingest_id
+                }], ingest_id, node.get('fetchlogs_id'))
 
 
         else:
@@ -1047,18 +1089,19 @@ class IngestClient:
             if measurand is None:
                 measurand = ingest_arr[-1]  ## last one
             if system_source_id is None: ## this is the system source id
-                system_source_id = self.delim.join(ingest_arr[1:len(ingest_arr)-1])  ## all the middle ones
+                system_source_id = self.build_source_id(ingest_arr[1:len(ingest_arr)-1])  ## all the middle ones
             if node_source_id is None:
-                if self.schema is None:
-                    node_source_id = self.delim.join(ingest_arr[1:len(ingest_arr)-1])  ## all the middle ones
-                else:
+                if self.schema == 'transform':
                     node_source_id = ingest_arr[1]
+                else:
+                    node_source_id = self.build_source_id(ingest_arr[1:len(ingest_arr)-1])  ## all the middle ones
+
 
         if not None in [ingest_id, datetime, source_name, node_source_id, system_source_id,  measurand]:
             ## this is to solve a realtime issue
             if ingest_id not in self.sensors:
                 ## I need to look up the node
-                node_ingest_id = self.delim.join([source_name, node_source_id])
+                node_ingest_id = self.build_source_id([source_name, node_source_id])
                 node = self.nodes.get(node_ingest_id, {})
                 self.add_sensors([{
                     "key": ingest_id,

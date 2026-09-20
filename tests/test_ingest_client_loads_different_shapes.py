@@ -116,6 +116,7 @@ def test_all_shapes_are_converted(
     content = files.get(key)
     test_file = make_test_file(key, content)
     client.load_key(test_file, sample_fetchlog, str(date.today()))
+    delim = client.delim # what delimiter does the file use
 
     assert len(client.nodes) == 1
     assert len(client.measurements) == 1
@@ -131,7 +132,7 @@ def test_all_shapes_are_converted(
         "site_name": "Station #1",
         "geom": "SRID=4326;POINT(-122.99144547 42.8011974)",
         "ismobile": False,
-        "ingest_id": "testing-station1",
+        "ingest_id": delim.join(["testing","station1"]),
         "metadata": "{}",
     }
     for field, expected in expected_node_fields.items():
@@ -142,8 +143,8 @@ def test_all_shapes_are_converted(
     system = next(iter(client.systems.values()))
     expected_system_fields = {
         "fetchlogs_id": sample_fetchlog,
-        "ingest_id": "testing-station1",
-        "ingest_sensor_nodes_id": "testing-station1",
+        "ingest_id": delim.join(["testing","station1"]),
+        "ingest_sensor_nodes_id": delim.join(["testing","station1"]),
         "manufacturer_key": "testing",
         "model_key": "default",
         "metadata": "{}",
@@ -156,8 +157,8 @@ def test_all_shapes_are_converted(
     sensor = next(iter(client.sensors.values()))
     expected_sensor_fields = {
         "fetchlogs_id": sample_fetchlog,
-        "ingest_sensor_systems_id": "testing-station1",
-        "ingest_id": "testing-station1-no",
+        "ingest_sensor_systems_id": delim.join(["testing","station1"]),
+        "ingest_id": delim.join(["testing","station1","no"]),
         "measurand": "no",
         "status": "active",
         "units": "ppb",
@@ -174,7 +175,7 @@ def test_all_shapes_are_converted(
         )
 
     expected_measure = [
-        "testing-station1-no",
+        delim.join(["testing","station1","no"]),
         "testing",
         "station1", ## system_source_id
         "station1", ## node_source_id

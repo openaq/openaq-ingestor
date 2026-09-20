@@ -207,6 +207,9 @@ def cmd_process(rows, args, connection = None):
 
     try:
         results = []
+        #result = process_all(rows, resources, args)
+        #results.append(result)
+
         for row in rows:
             result = process_one(row, resources, args)
             results.append(result)
@@ -218,6 +221,54 @@ def cmd_process(rows, args, connection = None):
 
     finally:
         resources.close()
+
+def process_all(rows, resources, args) -> dict:
+    """Process one fetchlog row. Returns stats dict."""
+    result = {
+        "fetchlogs_id": 0,
+        "key": 'all files',
+        "status": "ok",
+        "error": "",
+    }
+
+    start = time()
+    try:
+        client = IngestClient(resources=resources)
+        client.load_keys(rows)
+
+        if args.preview:
+            _print_client_summary(client)
+            result.update(client.summary())
+            result["elapsed_sec"] = round(time() - start, 3)
+            resources.rollback()
+            return result
+
+        client.dump_locations(load=not args.stage_only)
+        client.dump_measurements(load=not args.stage_only)
+        conn = resources.connection
+
+        #[print(x) for x in client.systems.values()]
+        # Stats before commit/rollback (staging still visible).
+        elapsed = round(time() - start, 3)
+        result.update(client.stats(conn, elapsed))
+
+        # Diagnostics also before commit/rollback.
+        #if args.diagnose:
+        #    run_diagnostics(conn, fetchlogs_id, args)
+
+        if args.commit:
+            resources.commit()
+        else:
+            resources.rollback()
+
+    except Exception as e:
+        resources.rollback()
+        result["status"] = "error"
+        result["error"] = str(e)
+        result["elapsed_sec"] = round(time() - start, 3)
+        logger.exception(f"Failed on {fetchlogs_id}: {key}")
+
+    return result
 
 
 def process_one(row, resources, args) -> dict:
@@ -320,7 +371,8 @@ def _print_client_summary(client):
 
 def print_report(results, *, committed):
     """Print per-key summary table + totals."""
-    header = (f"{'ID':>8} {'Key':<40} "
+    key_width = 60
+    header = (f"{'ID':>8} {'Key':<60} "
               f"{'Nodes M/A':>11} {'Sys M/A':>11} {'Sens M/A':>11} "
               f"{'Meas':>8} {'Rej':>6} {'Time':>8} {'Status':>8}")
     print("\n" + "=" * len(header))
@@ -333,11 +385,11 @@ def print_report(results, *, committed):
               "measurements_staged": 0, "rejects": 0}
 
     for r in results:
-        key_short = r["key"] if len(r["key"]) <= 40 else "..." + r["key"][-37:]
+        key_short = r["key"] if len(r["key"]) <= 60 else "..." + r["key"][-57:]
         if r["status"] == "ok":
             for k in totals:
                 totals[k] += r.get(k, 0)
-            print(f"{r['fetchlogs_id']:>8} {key_short:<40} "
+            print(f"{r['fetchlogs_id']:>8} {key_short:<60} "
                   f"{r.get('nodes_matched', 0):>4}/{r.get('nodes_added', 0):<6} "
                   f"{r.get('systems_matched', 0):>4}/{r.get('systems_added', 0):<6} "
                   f"{r.get('sensors_matched', 0):>4}/{r.get('sensors_added', 0):<6} "
@@ -346,12 +398,12 @@ def print_report(results, *, committed):
                   f"{r.get('elapsed_sec', 0):>7.2f}s "
                   f"{r['status']:>8}")
         else:
-            print(f"{r['fetchlogs_id']:>8} {key_short:<40} "
+            print(f"{r['fetchlogs_id']:>8} {key_short:<60} "
                   f"ERROR: {r['error'][:70]:<70} "
                   f"{r.get('elapsed_sec', 0):>7.2f}s")
 
     print("=" * len(header))
-    print(f"{'':>8} {'TOTALS':<40} "
+    print(f"{'':>8} {'TOTALS':<60} "
           f"{totals['nodes_matched']:>4}/{totals['nodes_added']:<6} "
           f"{totals['systems_matched']:>4}/{totals['systems_added']:<6} "
           f"{totals['sensors_matched']:>4}/{totals['sensors_added']:<6} "

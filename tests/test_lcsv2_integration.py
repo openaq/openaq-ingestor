@@ -56,6 +56,7 @@ class TestIngestClientIntegration:
         client.load_key(test_file, sample_fetchlog, str(date.today()))
         client.dump(load=True)
 
+        print(client.nodes)
         # Assert - Check staging_sensornodes
         cursor = ingest_resources.cursor()
         cursor.execute("SELECT COUNT(*) FROM staging_sensornodes")

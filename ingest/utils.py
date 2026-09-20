@@ -272,7 +272,6 @@ def deconstruct_path(key: str):
         path["bucket"] = settings.FETCH_BUCKET
         path["key"] = key
 
-    print(path)
     return path
 
 def get_data(key: str, resources=None):
@@ -864,7 +863,7 @@ def download_from_location(path: dict, output_path: str = None,
         logger.info(f"Already local: {path.get('key')}")
         return path
 
-    if location != 's3':
+    if location is not None and location != 's3':
         raise SystemExit(
             f"Cannot download from location: {location!r}"
         )

@@ -22,6 +22,55 @@ QUERIES = {
             ORDER BY source_name, source_id
         """,
     },
+    "added-systems": {
+        "title":"List of systems added for this fetchlog",
+        "sql": """
+        SELECT y.source_id as system_source_id
+        , n.source_name
+        , n.source_id
+        , array_agg(s.source_id) as sensors
+        FROM sensor_systems y
+        JOIN sensor_nodes n ON (n.sensor_nodes_id = y.sensor_nodes_id)
+        LEFT JOIN sensors s ON (y.sensor_systems_id = s.sensor_systems_id)
+        WHERE (y.metadata#>'{added_by,id}')::int = %(fetchlogs_id)s
+        GROUP BY 1,2,3
+        """
+    },
+    "added-sensors": {
+        "title":"List of sensors added for this fetchlog grouped by measurand",
+        "sql": """
+        SELECT s.sensors_id
+        , s.measurands_id
+        , m.measurand
+        , u.units
+        , s.source_id as sensor_source_id
+        , y.source_id as system_source_id
+        , n.source_id as source_id
+        , n.source_name
+        FROM sensors s
+        JOIN sensor_systems y ON (s.sensor_systems_id = y.sensor_systems_id)
+        JOIN sensor_nodes n ON (y.sensor_nodes_id = n.sensor_nodes_id)
+        JOIN measurands m ON (s.measurands_id = m.measurands_id)
+        JOIN units u ON (m.units_id = u.units_id)
+        WHERE (s.metadata#>'{added_by,id}')::int = %(fetchlogs_id)s
+        ORDER BY 2,3
+        """
+    },
+    "added-sensors-summary": {
+        "title":"Summary of sensors added for this fetchlog grouped by measurand",
+        "sql": """
+        SELECT s.measurands_id
+        , m.measurand
+        , u.units
+        , COUNT(1) as sensors
+        FROM sensors s
+        JOIN measurands m ON (s.measurands_id = m.measurands_id)
+        JOIN units u ON (m.units_id = u.units_id)
+        WHERE (s.metadata#>'{added_by,id}')::int = %(fetchlogs_id)s
+        GROUP BY 1,2,3
+        ORDER BY 2,3
+        """
+    },
     "added-summary": {
         "title": "Summary of Nodes added (not matched) for this fetchlog",
         "sql": """
@@ -37,7 +86,7 @@ QUERIES = {
             LEFT JOIN sensor_systems y ON (n.sensor_nodes_id = y.sensor_nodes_id)
             LEFT JOIN sensors s ON (y.sensor_systems_id = s.sensor_systems_id)
             LEFT JOIN measurements m ON (s.sensors_id = m.sensors_id)
-            WHERE (n.metadata->>'fetchlogs_id')::int = %(fetchlogs_id)s
+            WHERE (n.metadata#>'{added_by,id}')::int = %(fetchlogs_id)s
             GROUP BY source_name, 2
             ORDER BY source_name
         """,

@@ -614,10 +614,16 @@ _QUERIES = {
         GROUP BY s.source_id
     """,
     "nodes_by_source": """
-        SELECT sensor_nodes_id, source_name, source_id, site_name,
-               ismobile, ST_AsText(geom) AS geom_wkt, added_on, modified_on
-        FROM sensor_nodes
+        SELECT n.sensor_nodes_id, source_name, n.source_id, site_name,
+               ismobile, ST_AsText(geom) AS geom_wkt, n.added_on, n.modified_on
+               , n.metadata#>'{added_by,reason}' as reason
+               , array_agg(y.sensor_systems_id) as systems
+               , array_agg(s.sensors_id) as sensors
+        FROM sensor_nodes n
+        LEFT JOIN sensor_systems y ON (n.sensor_nodes_id = y.sensor_nodes_id)
+        LEFT JOIN sensors s ON (y.sensor_systems_id = s.sensor_systems_id)
         WHERE source_name = %(source_name)s
+        GROUP BY 1,2,3,4,5,6,7,8,9
         ORDER BY source_id
     """,
     "systems_by_source": """
@@ -629,10 +635,11 @@ _QUERIES = {
         ORDER BY sy.source_id
     """,
     "sensors_by_source": """
-        SELECT s.sensors_id, s.sensor_systems_id, s.source_id,
+        SELECT s.sensors_id, s.sensor_systems_id, n.sensor_nodes_id, s.source_id,
                s.measurands_id, s.data_averaging_period_seconds,
                s.data_logging_period_seconds, s.sensor_statuses_id,
-               s.modified_on, s.added_on
+               s.modified_on,
+               s.added_on
         FROM sensors s
         JOIN sensor_systems sy USING (sensor_systems_id)
         JOIN sensor_nodes n USING (sensor_nodes_id)
@@ -657,10 +664,10 @@ def get_object(ingest_resources):
         rejects = get_object("rejects", fetchlogs_id=42)
     """
     def _fetch(name: str, **params):
-        if name in DIAGNOSTIC_QUERIES:
-            sql = DIAGNOSTIC_QUERIES[name]['sql']
-        elif name in _QUERIES:
+        if name in _QUERIES:
             sql = _QUERIES[name]
+        elif name in DIAGNOSTIC_QUERIES:
+            sql = DIAGNOSTIC_QUERIES[name]['sql']
         else:
             raise ValueError(
                 f"Unknown query '{name}'. Available: {sorted(_QUERIES)}"

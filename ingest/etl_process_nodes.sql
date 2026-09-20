@@ -33,9 +33,20 @@ UPDATE staging_sensors
 SET units  = 'µg/m³'
 WHERE units IN ('µg/m��','��g/m³', 'ug/m3');
 
+-- For measurements only files without locations
+UPDATE staging_sensornodes sn
+SET sensor_nodes_id = n.sensor_nodes_id
+  , timezones_id = n.timezones_id
+  , countries_id = n.countries_id
+  , is_new = false
+FROM sensor_nodes n
+WHERE sn.source_name = n.source_name
+  AND sn.source_id = n.source_id
+  AND sn.geom IS NULL;
 
 -- now update them using the source + spatial method
 -- makeing sure to only pick one match for all nodes
+
 UPDATE staging_sensornodes sn
 SET sensor_nodes_id = best.sensor_nodes_id
   , timezones_id = best.timezones_id
@@ -67,9 +78,10 @@ FROM (
              -- Rank 2: closest spatial match
              st_distance(sn.geom, s.geom) ASC
 ) best
-  WHERE sn.ingest_id = best.ingest_id;
+  WHERE sn.ingest_id = best.ingest_id
+  AND sn.sensor_nodes_id IS NULL;
 
--- only update the nodes where the geom has changed
+  -- only update the nodes where the geom has changed
 -- the per row geom queries are really slow so we dont want to be doing that all the time
 -- ~18 locations per second
 -- UPDATE staging_sensornodes SET
@@ -107,18 +119,19 @@ WHERE ST_Intersects(s.geom, c.geog::geometry)
 
 -- Update the matched nodes if anything has changed
 UPDATE sensor_nodes
-SET source_id = COALESCE(s.source_id, sensor_nodes.source_id)
+SET site_name = COALESCE(s.site_name, sensor_nodes.site_name)
+  , source_id = COALESCE(s.source_id, sensor_nodes.source_id)
   , geom = COALESCE(s.geom, sensor_nodes.geom)
-  , site_name = COALESCE(s.site_name, sensor_nodes.site_name)
   , timezones_id = COALESCE(s.timezones_id, sensor_nodes.timezones_id)
   , countries_id = COALESCE(s.countries_id, sensor_nodes.countries_id)
   , ismobile = COALESCE(s.ismobile, sensor_nodes.ismobile)
-  , metadata = sensor_nodes.metadata || jsonb_modified('fetchlogs_id', fetchlogs_id, 'process-nodes')
+  , metadata = sensor_nodes.metadata || jsonb_modified('fetchlogs_id', fetchlogs_id, 'etl-process-nodes')
   , modified_on = clock_timestamp()
 FROM staging_sensornodes s
 WHERE sensor_nodes.sensor_nodes_id = s.sensor_nodes_id
 AND (
-     COALESCE(s.source_id, sensor_nodes.source_id) IS DISTINCT FROM sensor_nodes.source_id
+     COALESCE(s.geom, sensor_nodes.geom) IS DISTINCT FROM sensor_nodes.geom
+  OR COALESCE(s.source_id, sensor_nodes.source_id) IS DISTINCT FROM sensor_nodes.source_id
   OR COALESCE(s.geom, sensor_nodes.geom) IS DISTINCT FROM sensor_nodes.geom
   OR COALESCE(s.site_name, sensor_nodes.site_name) IS DISTINCT FROM sensor_nodes.site_name
   OR COALESCE(s.timezones_id, sensor_nodes.timezones_id) IS DISTINCT FROM sensor_nodes.timezones_id
@@ -150,7 +163,7 @@ SELECT site_name
 , source_name
 , ismobile
 , geom
-, metadata || jsonb_added('fetchlogs_id', fetchlogs_id, 'process-nodes')
+, metadata || jsonb_added('fetchlogs_id', fetchlogs_id, 'etl-process-nodes')
 , source_id
 , timezones_id
 -- default to the unknown provider
@@ -236,17 +249,37 @@ WHERE staging_sensorsystems.ingest_sensor_nodes_id = staging_sensornodes.ingest_
 
 -- And match to any existing sensor systems
 -- a null source_id or a source_id that is the same as the sensor_systems_id is considered a generic system
-UPDATE staging_sensorsystems
-SET sensor_systems_id = sensor_systems.sensor_systems_id
-, is_new = false
-FROM sensor_systems
-WHERE sensor_systems.sensor_nodes_id = staging_sensorsystems.sensor_nodes_id
-AND (sensor_systems.source_id = staging_sensorsystems.ingest_id
-  OR sensor_systems.source_id IS NULL
-  OR sensor_systems.source_id = sensor_systems.sensor_systems_id::text);
+-- UPDATE staging_sensorsystems
+
+UPDATE staging_sensorsystems ss
+SET sensor_systems_id = m.sensor_systems_id
+  , is_new = false
+FROM (
+  SELECT DISTINCT ON (ss2.ctid)
+    ss2.ctid AS staging_ctid,
+    s.sensor_systems_id
+  FROM staging_sensorsystems ss2
+  JOIN sensor_systems s
+    ON s.sensor_nodes_id = ss2.sensor_nodes_id
+   AND (
+     s.source_id = ss2.ingest_id                                 -- exact match
+     OR s.source_id ~* without_instrument_pattern(ss2.ingest_id) -- matches except for the instrument
+     OR s.source_id IS NULL                                      -- no source_id in the existing system
+     OR s.source_id = s.sensor_systems_id::text                  -- source_id matches its own id
+   )
+  ORDER BY ss2.ctid,
+    CASE
+      WHEN s.source_id = ss2.ingest_id THEN 1
+      WHEN s.source_id ~* without_instrument_pattern(ss2.ingest_id) THEN 2
+      WHEN s.source_id = s.sensor_systems_id::text THEN 3
+      WHEN s.source_id IS NULL THEN 4
+    END
+) m
+WHERE ss.ctid = m.staging_ctid;
 
 
--- log anything we were not able to get an id for
+
+
 WITH r AS (
 INSERT INTO rejects (t,tbl,r,fetchlogs_id)
 SELECT now()
@@ -265,7 +298,7 @@ INSERT INTO entities (full_name, ingest_id, entity_type, metadata)
 SELECT DISTINCT manufacturer_key
   , manufacturer_key
   , 'Organization'::entity_type
-  , jsonb_added('fetchlogs_id', fetchlogs_id, 'process-nodes')
+  , jsonb_added('fetchlogs_id', fetchlogs_id, 'etl-process-nodes')
 FROM staging_sensorsystems
 WHERE manufacturer_key IS NOT NULL
 ON CONFLICT DO NOTHING;
@@ -276,24 +309,24 @@ SELECT DISTINCT e.entities_id
   , 'Added automatically during ingest'
   , 'f'::boolean
   , s.instrument_ingest_id
-  , jsonb_added('fetchlogs_id', fetchlogs_id, 'process-nodes')
+  , jsonb_added('fetchlogs_id', fetchlogs_id, 'etl-process-nodes')
 FROM staging_sensorsystems s
 JOIN entities e ON s.manufacturer_key = e.ingest_id
 ON CONFLICT DO NOTHING;
 
 
 UPDATE sensor_systems p
-  SET source_id = s.ingest_id
-  , instruments_id = i.instruments_id
-  , modified_on = now()
-  , metadata = p.metadata || jsonb_modified('fetchlogs_id', fetchlogs_id, 'process-nodes')
+  SET instruments_id = i.instruments_id
+    , source_id = s.ingest_id
+    , modified_on = now()
+    , metadata = p.metadata || jsonb_modified('fetchlogs_id', fetchlogs_id, 'etl-process-nodes')
   FROM staging_sensorsystems s
   LEFT JOIN instruments i ON (s.instrument_ingest_id = i.ingest_id)
   WHERE p.sensor_systems_id = s.sensor_systems_id
   AND (
-    (p.source_id IS NULL AND s.ingest_id IS NOT NULL OR p.source_id != s.ingest_id)
-    OR
     (p.instruments_id IS NULL AND i.instruments_id IS NOT NULL OR p.instruments_id != i.instruments_id)
+    OR
+    (p.source_id IS NULL AND s.ingest_id IS NOT NULL OR p.source_id != s.ingest_id)
   );
 
 -- And finally we add the sensor systems
@@ -302,7 +335,7 @@ INSERT INTO sensor_systems (sensor_nodes_id, source_id, instruments_id, metadata
 SELECT sensor_nodes_id
 , s.ingest_id
 , i.instruments_id
-, s.metadata || jsonb_added('fetchlogs_id', fetchlogs_id, 'process-nodes')
+, s.metadata || jsonb_added('fetchlogs_id', fetchlogs_id, 'etl-process-nodes')
 FROM staging_sensorsystems s
 LEFT JOIN instruments i ON (s.instrument_ingest_id = i.ingest_id)
 WHERE sensor_nodes_id IS NOT NULL
@@ -387,21 +420,42 @@ UPDATE staging_sensors
 
 
 -- Then apply the new way
-UPDATE staging_sensors
+UPDATE staging_sensors s
 SET measurands_id = m.measurands_id
 FROM (SELECT key,  measurands_id FROM active_measurands_view) as m
-WHERE staging_sensors.measurand=m.key
-  AND staging_sensors.measurands_id IS NULL;
+WHERE m.key = s.measurand
+--WHERE m.key = format('%s%s', s.measurand, s.units)
+AND s.measurands_id IS NULL;
 
-
+  -- Find a matching sensor based on the same criteria as the systems
+  -- this accounts for any bad sensors that were added in previous instances
+  -- and will match a version that does not have the instrument added
 UPDATE staging_sensors s
-SET sensors_id = p.sensors_id
+SET sensors_id = best.sensors_id
   , is_new = 'f'::boolean
-FROM sensors p
-WHERE p.sensor_systems_id = s.sensor_systems_id
-AND (p.source_id = s.ingest_id
-  OR (p.source_id IS NULL AND p.measurands_id = s.measurands_id)
-   OR (p.source_id = p.sensors_id::text AND p.measurands_id = s.measurands_id));
+FROM (
+  SELECT DISTINCT ON (ss.ingest_id)
+    ss.ingest_id
+    , ss.sensor_systems_id
+    , p.sensors_id
+  FROM staging_sensors ss
+  JOIN sensors p ON p.sensor_systems_id = ss.sensor_systems_id
+  WHERE p.source_id = ss.ingest_id                                         -- best fit
+     OR p.source_id ~* without_instrument_pattern(ss.ingest_id)            -- next best
+     OR (p.source_id IS NULL AND p.measurands_id = ss.measurands_id)       -- backup
+     OR (p.source_id = p.sensors_id::text AND p.measurands_id = ss.measurands_id) -- backup
+  ORDER BY
+    ss.ingest_id
+    , CASE
+        WHEN p.source_id = ss.ingest_id THEN 1
+        WHEN p.source_id ~* without_instrument_pattern(ss.ingest_id) THEN 2
+        WHEN p.source_id IS NULL AND p.measurands_id = ss.measurands_id THEN 3
+        WHEN p.source_id = p.sensors_id::text AND p.measurands_id = ss.measurands_id THEN 4
+      END
+    , p.sensors_id  -- tiebreaker: prefer lowest id (or use added_on DESC, etc.)
+) best
+WHERE best.ingest_id = s.ingest_id
+  AND best.sensor_systems_id = s.sensor_systems_id;
 
 
 
@@ -438,7 +492,7 @@ SELECT ingest_id
 , logging_interval_seconds
 , averaging_interval_seconds
 , COALESCE(ss.sensor_statuses_id, 1)
-, s.metadata || jsonb_added('fetchlogs_id', fetchlogs_id, 'process-nodes')
+, s.metadata || jsonb_added('fetchlogs_id', fetchlogs_id, 'etl-process-nodes')
 FROM staging_sensors s
 LEFT JOIN sensor_statuses ss ON (ss.short_code = s.status)
 WHERE measurands_id is not null
@@ -460,7 +514,7 @@ FROM inserts;
   --- Update any that need to be updated
   UPDATE sensors
   SET source_id = s.ingest_id
-  , metadata = sensors.metadata || jsonb_modified('fetchlogs_id', fetchlogs_id, 'process-nodes')
+  , metadata = sensors.metadata || jsonb_modified('fetchlogs_id', fetchlogs_id, 'etl-process-nodes')
   , modified_on = now()
   FROM staging_sensors s
   WHERE sensors.sensors_id = s.sensors_id
@@ -546,7 +600,7 @@ INSERT INTO flags (flag_types_id, sensor_nodes_id, sensors_ids, period, note, me
   , CASE WHEN sensors_id IS NOT NULL THEN ARRAY[sensors_id] ELSE NULL END
   , period
   , note
-  , metadata || jsonb_added('fetchlogs_id', fetchlogs_id, 'process-nodes')
+  , metadata || jsonb_added('fetchlogs_id', fetchlogs_id, 'etl-process-nodes')
   FROM staging_flags
   WHERE flag_types_id IS NOT NULL
   AND sensor_nodes_id IS NOT NULL
@@ -557,7 +611,7 @@ INSERT INTO flags (flag_types_id, sensor_nodes_id, sensors_ids, period, note, me
  UPDATE flags fm
   SET period = sf.period + fm.period
   , note = sf.note
-  , metadata = fm.metadata || jsonb_modified('fetchlogs_id', fetchlogs_id, 'process-nodes')
+  , metadata = fm.metadata || jsonb_modified('fetchlogs_id', fetchlogs_id, 'etl-process-nodes')
   , modified_on = clock_timestamp()
   FROM staging_flags sf
   WHERE sf.flags_id = fm.flags_id;
