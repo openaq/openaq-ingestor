@@ -301,11 +301,14 @@ class TestAddMeasurement:
 
         assert len(client.measurements) == 1
         measurement = client.measurements[0]
+        print(measurement)
         assert measurement[0] == 'clarity-station001-pm25'  # ingest_id
         assert measurement[1] == 'clarity'  # source_name
-        assert measurement[2] == 'station001'  # source_id
-        assert measurement[3] == 'pm25'  # measurand
-        assert measurement[4] == 15.5  # value
+        assert measurement[2] == 'station001'  # node_source_id
+        assert measurement[3] == 'station001'  # system_source_id
+        assert measurement[4] == 'pm25'  # measurand
+        assert measurement[5] is None  # units
+        assert measurement[6] == 15.5  # value
 
     def test_add_measurement_from_csv_list_valid(self):
         """Test adding measurement from CSV list format."""
@@ -322,8 +325,9 @@ class TestAddMeasurement:
         assert measurement[0] == 'provider-location-no2'
         assert measurement[1] == 'provider'
         assert measurement[2] == 'location'
-        assert measurement[3] == 'no2'
-        assert measurement[4] == '25.3'
+        assert measurement[3] == 'location'
+        assert measurement[4] == 'no2'
+        assert measurement[6] == '25.3'
 
     def test_add_measurement_from_csv_with_coordinates(self):
         """Test adding measurement from CSV with lat/lon."""
@@ -337,8 +341,8 @@ class TestAddMeasurement:
 
         assert len(client.measurements) == 1
         measurement = client.measurements[0]
-        assert measurement[6] == '40.7128'  # lat
-        assert measurement[7] == '-74.0060'  # lon
+        assert measurement[8] == '40.7128'  # lat
+        assert measurement[9] == '-74.0060'  # lon
 
     def test_add_measurement_csv_too_short_skipped(self):
         """Test that CSV list with <3 elements is skipped."""
@@ -430,10 +434,11 @@ class TestAddMeasurement:
 
         assert len(client.measurements) == 1
         measurement = client.measurements[0]
+
         assert measurement[0] == 'provider-abc-def-ghi-pm25'
         assert measurement[1] == 'provider'
         assert measurement[2] == 'abc-def-ghi'  # multi-part source_id
-        assert measurement[3] == 'pm25'
+        assert measurement[4] == 'pm25'
 
     def test_add_measurement_optional_coordinates(self):
         """Test measurement with optional lat/lon coordinates."""
@@ -452,8 +457,8 @@ class TestAddMeasurement:
 
         assert len(client.measurements) == 1
         measurement = client.measurements[0]
-        assert measurement[6] == -74.0060  # lon
-        assert measurement[7] == 40.7128  # lat
+        assert measurement[8] == -74.0060  # lon
+        assert measurement[9] == 40.7128  # lat
 
 
 class TestAddNode:
@@ -474,7 +479,7 @@ class TestAddNode:
         client.add_node(node_data)
 
         assert len(client.nodes) == 1
-        node = client.nodes[0]
+        node = next(iter(client.nodes.values()))
         assert node['ingest_id'] == 'clarity-station001'
         assert node['source_name'] == 'clarity'
         assert node['source_id'] == 'station001'
@@ -507,7 +512,7 @@ class TestAddNode:
 
         client.add_node(node_data)
 
-        node = client.nodes[0]
+        node = next(iter(client.nodes.values()))
         assert node['source_name'] == 'provider'
 
     def test_add_node_explicit_source_name_overrides_extraction(self):
@@ -523,7 +528,7 @@ class TestAddNode:
 
         client.add_node(node_data)
 
-        node = client.nodes[0]
+        node = next(iter(client.nodes.values()))
         assert node['source_name'] == 'custom-source'
 
     def test_add_node_uses_metadata_source_if_no_ingest_id_parts(self):
@@ -543,7 +548,7 @@ class TestAddNode:
 
         client.add_node(node_data)
 
-        node = client.nodes[0]
+        node = next(iter(client.nodes.values()))
         assert node['source_name'] == 'metadata-source'
 
     def test_add_node_missing_source_name_raises_exception(self):
@@ -572,7 +577,7 @@ class TestAddNode:
 
         client.add_node(node_data)
 
-        node = client.nodes[0]
+        node = next(iter(client.nodes.values()))
         assert node['source_id'] == 'location123'
 
     def test_add_node_uuid_source_id_extraction(self):
@@ -587,7 +592,7 @@ class TestAddNode:
 
         client.add_node(node_data)
 
-        node = client.nodes[0]
+        node = next(iter(client.nodes.values()))
         assert node['source_id'] == 'abc-def-ghi'
 
     def test_add_node_single_part_ingest_id_uses_as_source_id(self):
@@ -603,7 +608,7 @@ class TestAddNode:
 
         client.add_node(node_data)
 
-        node = client.nodes[0]
+        node = next(iter(client.nodes.values()))
         assert node['source_id'] == 'locationonly'
 
     def test_add_node_uses_default_matching_method(self):
@@ -618,7 +623,7 @@ class TestAddNode:
 
         client.add_node(node_data)
 
-        node = client.nodes[0]
+        node = next(iter(client.nodes.values()))
         assert node['matching_method'] == 'ingest-id'
 
     def test_add_node_prevents_duplicates(self):
@@ -650,7 +655,7 @@ class TestAddNode:
 
         client.add_node(node_data)
 
-        node = client.nodes[0]
+        node = next(iter(client.nodes.values()))
         import json
         metadata = json.loads(node['metadata'])
         assert metadata['custom_field'] == 'custom_value'
@@ -676,4 +681,5 @@ class TestAddNode:
 
         assert len(client.nodes) == 1
         assert len(client.systems) == 1
-        assert client.systems[0]['ingest_id'] == 'provider-location-instrument1'
+        system = next(iter(client.systems.values()))
+        assert system['ingest_id'] == 'provider-location-instrument1'

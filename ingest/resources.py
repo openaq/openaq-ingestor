@@ -84,14 +84,19 @@ class Resources:
         """Alias for get_connection() with autocommit=True."""
         return self.get_connection(autocommit=True)
 
-    def cursor(self):
+    def cursor(self, **kwargs):
         """Get cursor from connection."""
-        return self.get_connection().cursor()
+        return self.get_connection().cursor(**kwargs)
 
     def commit(self):
         """Commit transaction if we own the connection."""
         if self._connection and self._owns_connection:
             self._connection.commit()
+
+    def rollback(self):
+        """Roll back transaction if we own the connection."""
+        if self._connection and self._owns_connection:
+            self._connection.rollback()
 
     def close(self):
         """Close connection if we own it."""
