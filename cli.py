@@ -207,12 +207,13 @@ def cmd_process(rows, args, connection = None):
 
     try:
         results = []
-        #result = process_all(rows, resources, args)
-        #results.append(result)
-
-        for row in rows:
-            result = process_one(row, resources, args)
+        if args.batch is not None:
+            result = process_all(rows, resources, args)
             results.append(result)
+        else:
+            for row in rows:
+                result = process_one(row, resources, args)
+                results.append(result)
 
         if not args.no_report:
             print_report(results, committed=args.commit)
