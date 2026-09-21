@@ -69,7 +69,7 @@ def parse_args():
     )
 
     # Selectors (mutually exclusive)
-    sel = p.add_mutually_exclusive_group(required=True)
+    sel = p.add_mutually_exclusive_group()
     sel.add_argument('--id', type=int, help='fetchlog id')
     sel.add_argument('--batch', type=str, help='batch uuid')
     sel.add_argument('--pattern', type=str, help='regex against fetchlog keys')
@@ -121,14 +121,26 @@ def parse_args():
                    help='write diagnostic results to CSV files in this directory '
                         '(otherwise print to console)')
 
+    # Handler invocation (for debugging)
+    hand = p.add_mutually_exclusive_group()
+    hand.add_argument('--run-cron', action='store_true',
+                      help='invoke cronhandler() as if triggered by EventBridge')
+    hand.add_argument('--simulate-s3', type=str, metavar='KEY',
+                      help='invoke handler() with a synthetic S3 event for KEY')
+    hand.add_argument('--simulate-sns', type=str, metavar='KEY',
+                      help='invoke handler() with a synthetic SNS-wrapped S3 event')
+
     args = p.parse_args()
 
-    # Require at least one selector (positional keys count)
-    if not any([args.id, args.batch, args.pattern, args.s3_prefix,
-                args.from_file, args.keys]):
-        p.error("provide a key selector")
+    print(args)
+
+    is_handler = args.run_cron or args.simulate_s3 or args.simulate_sns
+    if not is_handler and not any([args.id, args.batch, args.pattern,
+                                    args.s3_prefix, args.from_file, args.keys]):
+        p.error("provide a key selector or a handler action")
 
     return args
+
 
 
 def setup_logging(args):
@@ -180,6 +192,53 @@ def resolve_keys(args, *, connection=None) -> list:
 # ---------------------------------------------------------------------------
 # Command handlers
 # ---------------------------------------------------------------------------
+def cmd_run_cron(args):
+    """Invoke cronhandler() directly as if triggered by EventBridge."""
+    from ingest.handler import cronhandler
+
+    event = {
+        "source": "aws.events",
+        "detail-type": "Scheduled Event",
+    }
+    # Optional overrides from CLI args
+    if args.limit != 300:  # only if explicitly set
+        event["pipeline_limit"] = args.limit
+        event["realtime_limit"] = args.limit
+        event["metadata_limit"] = args.limit
+
+    logger.info("Invoking cronhandler")
+    cronhandler(event, None)
+
+
+def cmd_simulate_s3(key, args, wrap_in_sns=False):
+    """Invoke handler() with a synthetic S3 event for a specific key."""
+    from ingest.handler import handler
+    from ingest.settings import settings
+
+    bucket = args.bucket or settings.FETCH_BUCKET
+
+    s3_record = {
+        "s3": {
+            "bucket": {"name": bucket},
+            "object": {"key": key},
+        },
+    }
+
+    if wrap_in_sns:
+        import json
+        event = {
+            "Records": [{
+                "EventSource": "aws:sns",
+                "Sns": {
+                    "Message": json.dumps({"Records": [s3_record]}),
+                },
+            }],
+        }
+    else:
+        event = {"Records": [s3_record]}
+
+    logger.info(f"Invoking handler with synthetic S3 event: {bucket}/{key}")
+    handler(event, None)
 
 def cmd_dry_run(rows):
     """Print resolved keys and exit."""
@@ -474,6 +533,18 @@ def main():
 
     run_started_at = datetime.now(timezone.utc)
     logger.debug(f"Run started at {run_started_at.isoformat()}")
+
+    if args.run_cron:
+        cmd_run_cron(args)
+        return
+
+    if args.simulate_s3:
+        cmd_simulate_s3(args.simulate_s3, args, wrap_in_sns=False)
+        return
+
+    if args.simulate_sns:
+        cmd_simulate_s3(args.simulate_sns, args, wrap_in_sns=True)
+        return
 
     if args.diagnose == 'list':
         from ingest.diagnostics import list_queries

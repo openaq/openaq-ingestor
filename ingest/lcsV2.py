@@ -438,6 +438,11 @@ class IngestClient:
             start_time = time()
 
             cursor.execute(get_query(
+                "temp_locations_dump.sql",
+                table=db_table
+            ))
+
+            cursor.execute(get_query(
                 "temp_measurements_dump.sql",
                 table=db_table
             ))
