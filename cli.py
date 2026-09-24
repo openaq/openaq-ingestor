@@ -132,8 +132,6 @@ def parse_args():
 
     args = p.parse_args()
 
-    print(args)
-
     is_handler = args.run_cron or args.simulate_s3 or args.simulate_sns
     if not is_handler and not any([args.id, args.batch, args.pattern,
                                     args.s3_prefix, args.from_file, args.keys]):
