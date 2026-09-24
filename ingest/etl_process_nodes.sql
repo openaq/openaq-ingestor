@@ -33,6 +33,7 @@ UPDATE staging_sensors
 SET units  = 'µg/m³'
 WHERE units IN ('µg/m��','��g/m³', 'ug/m3');
 
+
 -- For measurements only files without locations
 UPDATE staging_sensornodes sn
 SET sensor_nodes_id = n.sensor_nodes_id
@@ -419,13 +420,23 @@ UPDATE staging_sensors
   AND staging_sensors.units IS NULL;
 
 
--- Then apply the new way
+-- Then apply the new way (transform)
 UPDATE staging_sensors s
 SET measurands_id = m.measurands_id
 FROM (SELECT key,  measurands_id FROM active_measurands_view) as m
 WHERE m.key = s.measurand
 --WHERE m.key = format('%s%s', s.measurand, s.units)
 AND s.measurands_id IS NULL;
+
+
+-- deal with realtime data
+UPDATE staging_sensors s
+SET measurands_id = m.measurands_id
+FROM (SELECT measurand, units, measurands_id FROM measurands) as m
+WHERE m.measurand = s.measurand
+AND m.units = s.units
+AND s.measurands_id IS NULL;
+
 
   -- Find a matching sensor based on the same criteria as the systems
   -- this accounts for any bad sensors that were added in previous instances

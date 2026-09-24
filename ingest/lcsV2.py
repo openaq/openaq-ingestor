@@ -182,6 +182,7 @@ class IngestClient:
     def __init__(
         self, key=None, fetchlogs_id=None, resources=None
     ):
+        logger.debug('Initializing client')
         self.key = key
         self.fetchlogs_id = fetchlogs_id
         self.keys = []
@@ -291,6 +292,28 @@ class IngestClient:
                 value = func(key, data)
         return col, value
 
+    def build_ingest_tables(self, cursor, loading: bool = True):
+        db_table = "TEMP TABLE" if (settings.USE_TEMP_TABLES and loading) else "TABLE"
+        logger.debug(f"Building ingest tables using {db_table} ({settings.USE_TEMP_TABLES}|{loading})")
+        cursor.execute(get_query(
+            "temporary_ingest_tables.sql",
+            table=db_table
+        ))
+
+    def reset(self):
+        with self.get_connection(True).cursor() as cursor:
+            logger.info("Dropping temporary tables if they exist")
+            cursor.execute("""
+            DROP TABLE IF EXISTS
+              staging_sensornodes
+            , staging_sensorsystems
+            , staging_sensors
+            , staging_flags
+            , staging_keys
+            , staging_measurements
+            , staging_inserted_measurements;
+            """)
+
     def dump(self, load: bool = True):
         """
         Dump any data that is currenly loaded into the database
@@ -308,15 +331,13 @@ class IngestClient:
         """
         Dump the nodes into the temporary tables
         """
-        db_table = "TEMP TABLE" if (settings.USE_TEMP_TABLES and load) else "TABLE"
-        logger.debug(f"Dumping {len(self.nodes)} nodes using {db_table} (TEMP: {settings.USE_TEMP_TABLES}, LOADING: {load})")
+        logger.debug(f"Dumping {len(self.nodes)} nodes using")
+
         connection = self.get_connection(True)
         with connection.cursor() as cursor:
             start_time = time()
-            cursor.execute(get_query(
-                "temp_locations_dump.sql",
-                table=db_table
-            ))
+
+            self.build_ingest_tables(cursor, loading = load)
 
             write_csv(
                 cursor,
@@ -430,22 +451,13 @@ class IngestClient:
 
 
     def dump_measurements(self, load: bool = True):
-        db_table = "TEMP TABLE" if (settings.USE_TEMP_TABLES and load) else "TABLE"
-        logger.debug(f"Dumping {len(self.measurements)} measurements using {db_table} ({settings.USE_TEMP_TABLES}|{load})")
+        logger.debug(f"Dumping {len(self.measurements)} measurements")
         connection = self.get_connection(True)
 
         with connection.cursor() as cursor:
             start_time = time()
 
-            cursor.execute(get_query(
-                "temp_locations_dump.sql",
-                table=db_table
-            ))
-
-            cursor.execute(get_query(
-                "temp_measurements_dump.sql",
-                table=db_table
-            ))
+            self.build_ingest_tables(cursor, loading = load)
 
             iterator = StringIteratorIO(
                 ("\t".join(map(clean_csv_value, line)) + "\n" for line in self.measurements)
@@ -474,6 +486,7 @@ class IngestClient:
         self.close()
 
 
+
     def load(self, data = {}):
 
         if "sensor_node_id" in data.keys():
@@ -492,8 +505,10 @@ class IngestClient:
             self.load_measurements(data.get('measurements'))
 
 
+
     def load_keys(self, rows):
         # for each fetchlog we need to read and load
+
         for row in rows:
             key = row[1]
             fetchlogs_id = row[0]

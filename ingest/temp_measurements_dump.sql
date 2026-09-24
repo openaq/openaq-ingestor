@@ -1,7 +1,7 @@
-DROP TABLE IF EXISTS
---  staging_sensors
-  staging_measurements
-, staging_inserted_measurements;
+-- DROP TABLE IF EXISTS
+-- --  staging_sensors
+--   staging_measurements
+-- , staging_inserted_measurements;
 
 
 -- CREATE {table} IF NOT EXISTS staging_sensors (

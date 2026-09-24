@@ -1,9 +1,3 @@
--- DROP TABLE IF EXISTS
---   staging_sensornodes
--- , staging_sensorsystems
--- , staging_sensors
--- , staging_flags
--- , staging_keys;
 
 CREATE {table} IF NOT EXISTS staging_keys (
   fetchlogs_id int,
@@ -73,4 +67,40 @@ CREATE {table} IF NOT EXISTS staging_flags (
     note text,
     metadata jsonb,
     fetchlogs_id int
+);
+
+
+CREATE {table} IF NOT EXISTS staging_measurements (
+    ingest_id text NOT NULL,
+    source_name text NOT NULL,
+    node_source_id text NOT NULL,
+    system_source_id text NOT NULL,
+    measurand text NOT NULL,
+    units text,   -- the current units of the measurement
+    units_id int, -- the current units_id for the measurement
+    sensors_id int,
+    sensor_averaging_interval interval,
+    measurands_id int,
+    value float,
+    value_original float,
+    datetime_from timestamptz,
+    datetime timestamptz,
+    lon float,
+    lat float,
+    fetchlogs_id int,
+    note text
+);
+
+--This table will hold measurements that have
+--actually been inserted into the measurements table
+--this is to deal with the overlap that we see in the
+--incoming files
+CREATE {table} IF NOT EXISTS staging_inserted_measurements (
+  sensors_id int
+  , datetime timestamptz
+  , value double precision
+  , value_original double precision
+  , lat double precision
+  , lon double precision
+  , fetchlogs_id int
 );

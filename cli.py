@@ -292,6 +292,8 @@ def process_all(rows, resources, args) -> dict:
     start = time()
     try:
         client = IngestClient(resources=resources)
+        # when we are saving the connection we need to reset
+        client.reset()
         client.load_keys(rows)
 
         if args.preview:
@@ -301,8 +303,9 @@ def process_all(rows, resources, args) -> dict:
             resources.rollback()
             return result
 
-        client.dump_locations(load=not args.stage_only)
-        client.dump_measurements(load=not args.stage_only)
+        #client.dump_locations(load=not args.stage_only)
+        #client.dump_measurements(load=not args.stage_only)
+        client.dump(load=not args.stage_only)
         conn = resources.connection
 
         #[print(x) for x in client.systems.values()]
@@ -344,6 +347,7 @@ def process_one(row, resources, args) -> dict:
     try:
         client = IngestClient(resources=resources,
                               fetchlogs_id=fetchlogs_id)
+        client.reset()
         client.load_key(key, fetchlogs_id, last_modified)
 
         if args.preview:
