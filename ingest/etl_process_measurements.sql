@@ -27,18 +27,29 @@ __ingest_method text := 'lcs';
 BEGIN
 
 
- WITH file_types AS (
+WITH file_types AS (
   SELECT * FROM (VALUES
-    ('realtime-gzipped', 'realtime')
-  , ('lcs-etl-pipeline/measures', 'lcs')
-  , ('lcs-etl-pipeline/stations', 'stations')
-  ) as d(pattern, file_type)
-  ) SELECT file_type INTO __ingest_method
+      ('realtime-gzipped', 'realtime')
+    , ('lcs-etl-pipeline/measures', 'lcs')
+    , ('lcs-etl-pipeline/stations', 'stations')
+  ) AS d(pattern, file_type)
+), matches AS (
+  SELECT
+    file_type,
+    SUM((key ~* pattern)::int) AS n
   FROM staging_keys, file_types
   GROUP BY file_type
-  ORDER BY SUM((key~*pattern)::int) DESC
-  LIMIT 1;
+  HAVING SUM((key ~* pattern)::int) > 0   -- ignore zero-match groups
+)
+SELECT file_type INTO __ingest_method
+FROM matches
+ORDER BY n DESC
+LIMIT 1;
 
+-- explicit handling
+IF __ingest_method IS NULL THEN
+  __ingest_method := 'unknown';
+END IF;
 
 
 DELETE
@@ -712,7 +723,7 @@ INSERT INTO ingest_stats (
  , ingested_on = EXCLUDED.ingested_on;
 
 
-RAISE NOTICE 'inserted-measurements: %, inserted-from: %, inserted-to: %, rejected-measurements: %, exported-sensor-days: %, process-time-ms: %, flagging-time-ms: %, insert-time-ms: %, fetchlogs-time-ms: %, cache-time-ms: %, source: lcs'
+RAISE NOTICE 'inserted-measurements: %, inserted-from: %, inserted-to: %, rejected-measurements: %, exported-sensor-days: %, process-time-ms: %, flagging-time-ms: %, insert-time-ms: %, fetchlogs-time-ms: %, cache-time-ms: %, source: %'
       , __inserted_measurements
       , __inserted_start_datetime
       , __inserted_end_datetime
@@ -722,7 +733,8 @@ RAISE NOTICE 'inserted-measurements: %, inserted-from: %, inserted-to: %, reject
       , __flagging_time_ms
       , __insert_time_ms
       , __fetchlogs_time_ms
-      , __cache_time_ms;
+      , __cache_time_ms
+      , __ingest_method;
 
 
 EXCEPTION WHEN OTHERS THEN
