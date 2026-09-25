@@ -27,6 +27,20 @@ __ingest_method text := 'lcs';
 BEGIN
 
 
+ WITH file_types AS (
+  SELECT * FROM (VALUES
+    ('realtime-gzipped', 'realtime')
+  , ('lcs-etl-pipeline/measures', 'lcs')
+  , ('lcs-etl-pipeline/stations', 'stations')
+  ) as d(pattern, file_type)
+  ) SELECT file_type INTO __ingest_method
+  FROM staging_keys, file_types
+  GROUP BY file_type
+  ORDER BY SUM((key~*pattern)::int) DESC
+  LIMIT 1;
+
+
+
 DELETE
 FROM staging_measurements
 WHERE ingest_id IS NULL
