@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     PIPELINE_LIMIT: int = 10
     METADATA_LIMIT: int = 10
     REALTIME_LIMIT: int = 10
+    ADAPTER_LIMIT: int = 10
     LOG_LEVEL: str = 'INFO'
     USE_TEMP_TABLES: bool = True
     PAUSE_INGESTING: bool = False

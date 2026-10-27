@@ -132,6 +132,7 @@ def cronhandler(event, context):
     pipeline_limit = settings.PIPELINE_LIMIT if 'pipeline_limit' not in event else event['pipeline_limit']
     realtime_limit = settings.REALTIME_LIMIT if 'realtime_limit' not in event else event['realtime_limit']
     metadata_limit = settings.METADATA_LIMIT if 'metadata_limit' not in event else event['metadata_limit']
+    adapter_limit = settings.ADAPTER_LIMIT if 'adapter_limit' not in event else event['adapter_limit']
     fetchlogKey = event.get('fetchlogKey')
 
     # this is mostly for debuging and running the occasional file from the aws console
@@ -180,6 +181,23 @@ def cronhandler(event, context):
     except Exception as e:
         logger.error(f"load realtime failed: {e}")
 
+    try:
+        if adapter_limit > 0:
+            cnt = 0
+            loaded = 1
+            while (
+                    loaded > 0
+                    and (time() - start_time) < timeout
+            ):
+                loaded = load_measurements_db(adapter_limit, ascending, pattern=r'^data/\d{4}-\d{2}-\d{2}/.*\.json.gz$')
+                cnt += loaded
+                logger.info(
+                    "loaded %s adapter records, timer: %0.4f",
+                    cnt, time() - start_time
+                )
+    except Exception as e:
+        logger.error(f"load adapter failed: {e}")
+        
     try:
         if pipeline_limit > 0:
             cnt = 0
