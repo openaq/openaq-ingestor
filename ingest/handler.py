@@ -189,7 +189,7 @@ def cronhandler(event, context):
                     loaded > 0
                     and (time() - start_time) < timeout
             ):
-                loaded = load_measurements_db(adapter_limit, ascending, pattern=r'^data/\d{4}-\d{2}-\d{2}/.*\.json.gz$')
+                loaded = load_measurements_db(adapter_limit, ascending, pattern=r'^data/[0-9]{4}-[0-9]{2}-[0-9]{2}/.*[.]json[.]gz$')
                 cnt += loaded
                 logger.info(
                     "loaded %s adapter records, timer: %0.4f",
