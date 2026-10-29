@@ -154,8 +154,7 @@ def cronhandler(event, context):
                     loaded > 0
                     and (time() - start_time) < timeout
             ):
-                #loaded = load_metadata_db(metadata_limit, ascending)
-                loaded = load_measurements_db(realtime_limit, ascending, pattern='^stations/.*\\.json.gz$')
+                loaded = load_measurements_db(metadata_limit, ascending, pattern='^stations/.*\\.json.gz$')
                 cnt += loaded
                 logger.info(
                     "loaded %s metadata records, timer: %0.4f",
@@ -172,7 +171,6 @@ def cronhandler(event, context):
                     loaded > 0
                     and (time() - start_time) < timeout
             ):
-                #loaded = load_db(realtime_limit, ascending)
                 loaded = load_measurements_db(realtime_limit, ascending, pattern='^realtime-gzipped/.*\\.ndjson.gz$')
                 cnt += loaded
                 logger.info(
@@ -190,7 +188,7 @@ def cronhandler(event, context):
                     loaded > 0
                     and (time() - start_time) < timeout
             ):
-                loaded = load_measurements_db(adapter_limit, ascending, pattern=r'^data/[0-9]{4}-[0-9]{2}-[0-9]{2}/.*[.]json[.]gz$')
+                loaded = load_measurements_db(adapter_limit, ascending, pattern=r'^data/[0-9]{4}-[0-9]{2}-[0-9]{2}/.*[.]json[.]gz$', delimiter='/')                
                 cnt += loaded
                 logger.info(
                     "loaded %s adapter records, timer: %0.4f",
@@ -221,11 +219,11 @@ def cronhandler(event, context):
 
 
 # Keep seperate from above so we can test rows not from the database
-def load_measurements(rows):
+def load_measurements(rows, delimiter: str):
     logger.debug(f"loading {len(rows)} measurements")
     start_time = time()
     # get a client object to hold all the data
-    client = IngestClient()
+    client = IngestClient(delimiter=delimiter)
     # load all the keys
     client.load_keys(rows)
     # and finally we can dump it all into the db
@@ -249,8 +247,9 @@ def load_fetchlog(
 def load_measurements_db(
     limit=250,
     ascending: bool = False,
-    pattern = '^lcs-etl-pipeline/measures/.*\\.(csv|json)'
+    pattern = '^lcs-etl-pipeline/measures/.*\\.(csv|json)',
+    delimiter: str = '-'
     ):
     rows = load_fetchlogs(pattern=pattern, limit=limit, ascending=ascending)
-    load_measurements(rows)
+    load_measurements(rows, delimiter)
     return len(rows)

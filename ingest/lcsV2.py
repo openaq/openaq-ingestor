@@ -180,7 +180,7 @@ def to_nodeid(key, data):
 
 class IngestClient:
     def __init__(
-        self, key=None, fetchlogs_id=None, resources=None
+        self, key=None, fetchlogs_id=None, resources=None, delimiter: str = '-'
     ):
         logger.debug('Initializing client')
         self.key = key
@@ -199,7 +199,7 @@ class IngestClient:
         self.matching_method = 'ingest-id'
         self.source = None
         self.schema = None
-        self.delim = "-"
+        self.delim = delimiter
 
         # Resource management via resources
         if resources:
@@ -1099,6 +1099,7 @@ class IngestClient:
 
         # parse the ingest id here only if we need it
         if None in [source_name, node_source_id, system_source_id, measurand]:
+            logger.info(self.delim)
             ingest_arr = ingest_id.split(self.delim)
             if len(ingest_arr) < 3:
                 logger.warning(f'Not enough information in ingest-id: `{ingest_id}`')
