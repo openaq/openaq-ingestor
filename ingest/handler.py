@@ -80,7 +80,8 @@ def handler(event, context, resources=None):
                             VALUES(%s, %s, %s, now())
                             ON CONFLICT (key) DO UPDATE
                             SET last_modified=EXCLUDED.last_modified,
-                            completed_datetime=NULL
+                            completed_datetime=NULL,
+                            init_datetime=now()
                             RETURNING *;
                             """,
                             (key, file_size, last_modified, ),
