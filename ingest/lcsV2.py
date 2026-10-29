@@ -180,8 +180,7 @@ def to_nodeid(key, data):
 
 class IngestClient:
     def __init__(
-        self, key=None, fetchlogs_id=None, resources=None, delimiter: str = '-'
-    ):
+        self, key=None, fetchlogs_id=None, resources=None):
         logger.debug('Initializing client')
         self.key = key
         self.fetchlogs_id = fetchlogs_id
@@ -199,7 +198,7 @@ class IngestClient:
         self.matching_method = 'ingest-id'
         self.source = None
         self.schema = None
-        self.delim = delimiter
+        self.delim = '-'
 
         # Resource management via resources
         if resources:
@@ -645,6 +644,8 @@ class IngestClient:
             self.schema = meta.get('schema')
             if self.schema == "v0.1" and "sourceName" in meta.keys():
                 self.schema = "transform"
+                self.delim = "/"
+            if self.schema == "transform":
                 self.delim = "/"
 
         self.insert_metadata(meta, errors)
