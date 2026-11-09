@@ -145,8 +145,11 @@ def test_all_shapes_are_converted(
         "fetchlogs_id": sample_fetchlog,
         "ingest_id": delim.join(["testing","station1"]),
         "ingest_sensor_nodes_id": delim.join(["testing","station1"]),
-        "manufacturer_key": "testing",
-        "model_key": "default",
+        # no instrument provided so these are left null and the
+        # instrument is resolved to a fallback during etl
+        "manufacturer_key": None,
+        "model_key": None,
+        "instrument_ingest_id": None,
         "metadata": "{}",
     }
     for field, expected in expected_system_fields.items():

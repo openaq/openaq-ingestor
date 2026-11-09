@@ -293,36 +293,6 @@ QUERIES = {
             LIMIT 50
         """,
     },
-    # ----- Cross-cutting --------------------------------------------------
-    "providers-in-batch": {
-        "title": "Provider IDs across all nodes matched or added in this fetchlog",
-        "sql": """
-            SELECT DISTINCT n.providers_id, p.label
-            FROM sensor_nodes n
-            LEFT JOIN providers p USING (providers_id)
-            WHERE n.sensor_nodes_id IN (
-                SELECT sensor_nodes_id
-                FROM staging_sensornodes
-                WHERE fetchlogs_id = %(fetchlogs_id)s
-                  AND sensor_nodes_id IS NOT NULL
-            )
-            ORDER BY n.providers_id
-        """,
-    },
-    "sources-added-count": {
-        "title": "Count of nodes added per source (this fetchlog)",
-        "sql": """
-            SELECT n.source_name
-            , COUNT(*) AS added
-            FROM sensor_nodes n
-            JOIN staging_sensornodes s
-              ON s.sensor_nodes_id = n.sensor_nodes_id
-             AND s.fetchlogs_id = %(fetchlogs_id)s
-             AND s.is_new
-            GROUP BY n.source_name
-            ORDER BY added DESC
-        """,
-    },
     "rejects-by-reason": {
         "title": "Reject counts grouped by table/reason",
         "sql": """
@@ -379,6 +349,36 @@ QUERIES = {
         GROUP BY 1,2,3,4,5,6,7
         LIMIT 50
     """,
+    },
+    # ----- Cross-cutting --------------------------------------------------
+    "providers-in-batch": {
+        "title": "Provider IDs across all nodes matched or added in this fetchlog",
+        "sql": """
+            SELECT DISTINCT n.providers_id, p.label
+            FROM sensor_nodes n
+            LEFT JOIN providers p USING (providers_id)
+            WHERE n.sensor_nodes_id IN (
+                SELECT sensor_nodes_id
+                FROM staging_sensornodes
+                WHERE fetchlogs_id = %(fetchlogs_id)s
+                  AND sensor_nodes_id IS NOT NULL
+            )
+            ORDER BY n.providers_id
+        """,
+    },
+    "sources-added-count": {
+        "title": "Count of nodes added per source (this fetchlog)",
+        "sql": """
+            SELECT n.source_name
+            , COUNT(*) AS added
+            FROM sensor_nodes n
+            JOIN staging_sensornodes s
+              ON s.sensor_nodes_id = n.sensor_nodes_id
+             AND s.fetchlogs_id = %(fetchlogs_id)s
+             AND s.is_new
+            GROUP BY n.source_name
+            ORDER BY added DESC
+        """,
     },
     "unmatched-nodes": {
         "title": "Nodes in staging that failed to match any existing node "
@@ -502,17 +502,24 @@ QUERIES = {
     "instrument-summary": {
         "title": "Instruments linked in staging for this fetchlog",
         "sql": """
-            SELECT i.instruments_id
+            -- linked instrument on the system, falling back to the
+            -- instrument resolved in staging (fallbacks never replace a link)
+            SELECT COALESCE(sy.instruments_id, s.instruments_id) as instruments_id
             , m.full_name as manufacturer
             , i.label as model
-            , COUNT(sensor_systems_id) as with_id
-            , SUM(is_new::int) as is_new
+            , s.instrument_ingest_id
+            , COUNT(1) as n
+            , COUNT(s.sensor_systems_id) as with_id
+            , SUM(s.is_new::int) as is_new
+            , SUM(s.is_fallback_instrument::int) as is_fallback
             FROM staging_sensorsystems s
-            JOIN instruments i ON (i.ingest_id = s.instrument_ingest_id)
-            JOIN entities m ON (i.manufacturer_entities_id = m.entities_id)
+            LEFT JOIN sensor_systems sy ON (sy.sensor_systems_id = s.sensor_systems_id)
+            LEFT JOIN instruments i
+              ON (i.instruments_id = COALESCE(sy.instruments_id, s.instruments_id))
+            LEFT JOIN entities m ON (i.manufacturer_entities_id = m.entities_id)
             WHERE s.fetchlogs_id = %(fetchlogs_id)s
-            GROUP BY 1,2,3
-            ORDER BY 2,3
+            GROUP BY 1,2,3,4
+            ORDER BY 2,3,4
         """,
     },
     "measurement-unit-summary": {

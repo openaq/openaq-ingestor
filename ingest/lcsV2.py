@@ -937,16 +937,32 @@ class IngestClient:
                     instrument = s.get('instrument').split('::')
                     system['manufacturer_key'] = instrument[0]
                     system['model_key'] = instrument[1] if len(instrument)>1 else 'default'
+                    system['instrument_ingest_id'] = s.get('instrument')
                 elif key not in ["sensor_system_id","key","system_id"]:
                     metadata[key] = value
 
             system["metadata"] = orjson.dumps(metadata).decode()
 
-            if system.get('manufacturer_key') in (None,'default'):
-                system['manufacturer_key'] = ingest_arr[0]
-
-            if 'model_key' not in system.keys():
-                system['model_key'] = 'default'
+            # Only build out instrument keys when the data provides
+            # instrument details. Systems without any (missing or all 'default')
+            # are left null and linked to a fallback instrument during the etl
+            has_instrument = any(
+                system.get(k) not in (None, 'default')
+                for k in ('manufacturer_key', 'model_key')
+            )
+            if not has_instrument:
+                system['manufacturer_key'] = None
+                system['model_key'] = None
+                system['instrument_ingest_id'] = None
+            else:
+                if system.get('manufacturer_key') in (None, 'default'):
+                    system['manufacturer_key'] = ingest_arr[0]
+                if system.get('model_key') is None:
+                    system['model_key'] = 'default'
+                if system.get('instrument_ingest_id') is None:
+                    system['instrument_ingest_id'] = (
+                        f"{system['manufacturer_key']}::{system['model_key']}"
+                    )
 
             logger.debug(f"Adding system {id}")
             self.systems[id] = system
