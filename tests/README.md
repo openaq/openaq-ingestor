@@ -24,7 +24,7 @@ This directory contains integration tests for the `openaq-ingestor` handler.
 
 ### Run all handler tests (integration + unit)
 ```bash
-poetry run pytest tests/test_handler_integration.py tests/test_cronhandler_unit.py -v
+poetry run pytest tests/test_handler_integration.py tests/test_cronhandler_integration.py -v
 ```
 
 ### Run only integration tests
@@ -34,18 +34,18 @@ poetry run pytest tests/test_handler_integration.py -v -m integration
 
 ### Run only unit-like tests
 ```bash
-poetry run pytest tests/test_cronhandler_unit.py -v
+poetry run pytest tests/test_cronhandler_integration.py -v
 poetry run pytest tests -m "not integration"
 ```
 
 ### Run with coverage
 ```bash
-poetry run pytest tests/test_handler_integration.py tests/test_cronhandler_unit.py --cov=ingest.handler --cov-report=term-missing
+poetry run pytest tests/test_handler_integration.py tests/test_cronhandler_integration.py --cov=ingest.handler --cov-report=term-missing
 ```
 
 ### Run specific test class
 ```bash
-poetry run pytest tests/test_cronhandler_unit.py::TestCronhandlerTimeout -v
+poetry run pytest tests/test_cronhandler_integration.py::TestCronhandlerTimeout -v
 ```
 
 ### Run specific test
@@ -62,23 +62,21 @@ poetry run pytest tests/ -v
 
 ### Test Files
 - `test_handler_integration.py` - Integration tests for handler() and cronhandler() functions
-- `test_cronhandler_unit.py` - Unit tests for cronhandler() orchestration logic
+- `test_cronhandler_integration.py` - Unit tests for cronhandler() orchestration logic
 
 ### Test Classes
 
 **Integration Tests (test_handler_integration.py):**
 - `TestHandlerSNSEvents` - Tests for SNS-wrapped S3 events (production path)
 - `TestHandlerDirectS3Events` - Tests for direct S3 events (local testing/manual invocations)
-- `TestCronhandlerIntegration` - Integration tests for EventBridge cron handler
+- `TestHandlerRouting` - Routing of EventBridge and unrecognized events
 - `TestGetKeysFromSnsRecord` - Tests for SNS message parsing helper
 
-**Unit Tests (test_cronhandler_unit.py):**
-- `TestCronhandlerPaused` - Tests for PAUSE_INGESTING behavior
-- `TestCronhandlerFetchlogPattern` - Tests for fetchlogKey pattern processing
-- `TestCronhandlerLoaderOrchestration` - Tests for loader function orchestration
-- `TestCronhandlerEventOverrides` - Tests for event parameter overrides
+**Unit Tests (test_cronhandler_integration.py):**
+- `TestCronhandlerOrchestration` - Stage order, batching, limits, event overrides, fetchlogKey, PAUSE_INGESTING
 - `TestCronhandlerErrorHandling` - Tests for error resilience
 - `TestCronhandlerTimeout` - Tests for timeout handling
+- `TestCronhandlerLogging` - Tests for log output
 
 ### Fixtures (conftest.py)
 - `db_connection` - Database connection with automatic rollback
@@ -111,6 +109,20 @@ This means tests can run in any order without side effects.
 
 ### Database Connection
 Tests connect to the local PostgreSQL database on port 5777 (configured in `.env.local`).
+
+Any test that uses the `db_connection` fixture, directly or through another fixture, is skipped when the database is not reachable. The rest of the suite still runs.
+
+## Fix List
+
+Known failures, marked with `@deferred(...)` (a strict `xfail`, see `conftest.py`). Each needs a decision on the ETL SQL before the test can be fixed. When one starts passing the suite fails until its marker is removed.
+
+1. **Realtime sensor matches an inactive measurand.** The "deal with realtime data" block in `etl_process_nodes.sql` matches on measurand and units without checking `is_active`, so `no` in `ppm` is assigned the inactive `no`/`ppm` measurand and is never converted to ppb.
+   - `test_lcsv2_data_conversion.py`: `test_ingest_realtime_shape_is_converted`, `test_ingest_realtime_is_converted_when_sensor_exists`, `test_ingest_uses_correct_conversion_when_measurand_specific_one_exists`
+2. **Bare parameter without usable units is rejected.** With missing or unknown units the fallback looks up the bare name (`no`, `pm10`) in `active_measurands_view`, whose keys are `no:parts`, `no:mass`, `pm10:mass`. The sensor is rejected as `staging_sensors-missing-measurands-id` and its measurements as `staging_measurements-missing-measurands-id`, so the expected default unit, `meas-no-unit-conversion` and `meas-unsupported-measurand` paths are never reached.
+   - `test_lcsv2_data_conversion.py`: `test_ingest_realtime_is_rejected_when_units_are_not_convertable`, `test_ingest_realtime_is_rejected_when_measurand_is_not_supported`, `test_ingest_user_default_unit_for_measurand_when_none_provided`, `test_ingest_user_default_unit_for_measurand_when_none_provided_and_sensor_exists`
+   - `test_lcsv2_integration.py`: `test_ingest_simple_data_to_staging`, `test_ingest_realtime_measures_to_staging`
+3. **Senstate measurements stage nodes.** The test expects no staged nodes from a measurements-only CSV; the client stages one per location.
+   - `test_lcsv2_integration.py`: `test_ingest_senstate_csv_to_staging`
 
 ## Coverage
 

@@ -18,6 +18,16 @@ logging.getLogger('boto3').setLevel(logging.WARNING)
 logging.getLogger('botocore').setLevel(logging.WARNING)
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 
+@pytest.fixture(autouse=True)
+def no_metadata_insert(mocker):
+    """
+    These tests only check parsing. Without this, loading a file with a
+    meta section writes (and commits) to the database on the client's
+    own connection.
+    """
+    return mocker.patch.object(IngestClient, 'insert_metadata')
+
+
 def get_path(relpath):
     dirname = os.path.dirname(__file__)
     return os.path.join(dirname, relpath);

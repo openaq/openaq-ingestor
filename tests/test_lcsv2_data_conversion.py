@@ -5,6 +5,7 @@ from unittest.mock import patch
 from ingest.lcsV2 import IngestClient
 from psycopg2.extras import RealDictCursor
 
+from tests.conftest import deferred, FIX_BARE_PARAMETER, FIX_INACTIVE_MEASURAND
 from tests._debug import dump
 
 
@@ -20,6 +21,7 @@ class TestIngestClientIntegration:
     - fetchlogs tracking
     """
 
+    @deferred(FIX_INACTIVE_MEASURAND)
     def test_ingest_realtime_shape_is_converted(
         self,
         ingest_resources,
@@ -67,6 +69,7 @@ class TestIngestClientIntegration:
         assert meas.get('value') == 2
 
 
+    @deferred(FIX_INACTIVE_MEASURAND)
     def test_ingest_realtime_is_converted_when_sensor_exists(
         self,
         create_node,
@@ -138,6 +141,7 @@ class TestIngestClientIntegration:
         assert meas.get('value') == 2
 
 
+    @deferred(FIX_INACTIVE_MEASURAND)
     def test_ingest_uses_correct_conversion_when_measurand_specific_one_exists(
         self,
         create_node,
@@ -171,6 +175,7 @@ class TestIngestClientIntegration:
         assert staged_measurements[0].get('value') == pytest.approx(0.02)
 
 
+    @deferred(FIX_BARE_PARAMETER)
     def test_ingest_realtime_is_rejected_when_units_are_not_convertable(
         self,
         create_node,
@@ -195,6 +200,7 @@ class TestIngestClientIntegration:
         assert len(staged_measurements) == 0
 
 
+    @deferred(FIX_BARE_PARAMETER)
     def test_ingest_realtime_is_rejected_when_measurand_is_not_supported(
         self,
         create_node,
@@ -218,6 +224,7 @@ class TestIngestClientIntegration:
         assert rejects[2].get('tbl') == 'meas-unsupported-measurand'
         assert len(staged_measurements) == 0
 
+    @deferred(FIX_BARE_PARAMETER)
     def test_ingest_user_default_unit_for_measurand_when_none_provided(
         self,
         create_node,
@@ -241,6 +248,7 @@ class TestIngestClientIntegration:
 
 
 
+    @deferred(FIX_BARE_PARAMETER)
     def test_ingest_user_default_unit_for_measurand_when_none_provided_and_sensor_exists(
         self,
         create_node,

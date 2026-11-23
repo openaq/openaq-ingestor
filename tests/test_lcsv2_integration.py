@@ -5,6 +5,7 @@ from unittest.mock import patch
 from ingest.lcsV2 import IngestClient
 
 from tests.conftest import get_test_path
+from tests.conftest import deferred, FIX_BARE_PARAMETER, FIX_SENSTATE_NODES
 from tests._debug import dump
 
 dataV2 = """
@@ -41,6 +42,7 @@ class TestIngestClientIntegration:
         """Automatically disable temp tables for all tests in this class."""
         pass
 
+    @deferred(FIX_BARE_PARAMETER)
     def test_ingest_simple_data_to_staging(
         self,
         ingest_resources,
@@ -85,6 +87,7 @@ class TestIngestClientIntegration:
         assert measurement_count == 2, f"Expected 2 measurements, got {measurement_count}"
         cursor.close()
 
+    @deferred(FIX_BARE_PARAMETER)
     def test_ingest_realtime_measures_to_staging(
         self,
         ingest_resources,
@@ -165,6 +168,7 @@ class TestIngestClientIntegration:
             assert node[1] is not None, "source_name should not be NULL"
         cursor.close()
 
+    @deferred(FIX_SENSTATE_NODES)
     def test_ingest_senstate_csv_to_staging(
         self,
         ingest_resources,

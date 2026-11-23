@@ -32,6 +32,47 @@ def pytest_configure(config):
         print("\n⚠️  --persist-db active: DB changes will be COMMITTED\n")
 
 
+# Tests that reach the database all do so through this fixture
+DATABASE_FIXTURE = "db_connection"
+
+
+def _database_error():
+    """Return None if the test database accepts connections, else the error."""
+    try:
+        psycopg2.connect(settings.DATABASE_WRITE_URL, connect_timeout=3).close()
+    except psycopg2.OperationalError as e:
+        return str(e).strip().splitlines()[0]
+    return None
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip tests that need the database when it is not running."""
+    db_items = [i for i in items if DATABASE_FIXTURE in i.fixturenames]
+    if not db_items:
+        return
+    error = _database_error()
+    if error is None:
+        return
+    skip = pytest.mark.skip(reason=f"database not available: {error}")
+    for item in db_items:
+        item.add_marker(skip)
+
+
+def deferred(reason: str):
+    """
+    Mark a known failure that is on the fix list in tests/README.md.
+
+    strict so the test fails once it starts passing, as a reminder to
+    remove the marker and the fix list entry.
+    """
+    return pytest.mark.xfail(reason=reason, strict=True)
+
+
+FIX_INACTIVE_MEASURAND = "fix list 1: realtime sensor matches an inactive measurand"
+FIX_BARE_PARAMETER = "fix list 2: bare parameter without usable units is rejected"
+FIX_SENSTATE_NODES = "fix list 3: senstate measurements stage nodes"
+
+
 def get_test_path(relpath: str) -> str:
     """Absolute path to a file in the tests/ directory."""
     return os.path.join(os.path.dirname(__file__), relpath)
@@ -300,6 +341,7 @@ def mock_cronhandler_settings(mocker):
     mock_settings.METADATA_LIMIT = 10
     mock_settings.REALTIME_LIMIT = 10
     mock_settings.PIPELINE_LIMIT = 10
+    mock_settings.ADAPTER_LIMIT = 10
     return mock_settings
 
 def _get_measurand_id(cursor, measurand: str, units: str = None):

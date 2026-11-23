@@ -9,7 +9,43 @@ on:
   workflow_dispatch:
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      ## placeholders so settings load, no database is available here
+      ## so tests that need one are skipped (see tests/conftest.py)
+      DATABASE_READ_USER: test
+      DATABASE_READ_PASSWORD: test
+      DATABASE_WRITE_USER: test
+      DATABASE_WRITE_PASSWORD: test
+      DATABASE_DB: test
+      DATABASE_HOST: localhost
+      DATABASE_PORT: 5432
+      FETCH_BUCKET: test-fetch-bucket
+      ETL_BUCKET: test-etl-bucket
+      ## fake credentials for moto
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: testing
+      AWS_SECRET_ACCESS_KEY: testing
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+
+      - name: Install dependencies
+        run: poetry install
+
+      - name: Run tests
+        run: poetry run pytest tests -o log_cli=false
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repo
