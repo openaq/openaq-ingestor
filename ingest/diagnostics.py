@@ -504,21 +504,39 @@ QUERIES = {
         "sql": """
             -- linked instrument on the system, falling back to the
             -- instrument resolved in staging (fallbacks never replace a link)
-            SELECT COALESCE(sy.instruments_id, s.instruments_id) as instruments_id
-            , m.full_name as manufacturer
-            , i.label as model
-            , s.instrument_ingest_id
-            , COUNT(1) as n
-            , COUNT(s.sensor_systems_id) as with_id
-            , SUM(s.is_new::int) as is_new
-            , SUM(s.is_fallback_instrument::int) as is_fallback
-            FROM staging_sensorsystems s
-            LEFT JOIN sensor_systems sy ON (sy.sensor_systems_id = s.sensor_systems_id)
-            LEFT JOIN instruments i
-              ON (i.instruments_id = COALESCE(sy.instruments_id, s.instruments_id))
-            LEFT JOIN entities m ON (i.manufacturer_entities_id = m.entities_id)
-            WHERE s.fetchlogs_id = %(fetchlogs_id)s
-            GROUP BY 1,2,3,4
+            -- measurands come from the staged sensors on those systems
+            -- (sensors rejected for a missing measurand are not included)
+            SELECT g.instruments_id
+            , g.manufacturer
+            , g.model
+            , g.instrument_ingest_id
+            , g.n
+            , g.with_id
+            , g.is_new
+            , g.is_fallback
+            , (SELECT string_agg(DISTINCT format('%%s (%%s)', ms.measurand, ms.units), ', ')
+               FROM staging_sensors ss
+               JOIN measurands ms ON (ms.measurands_id = ss.measurands_id)
+               WHERE ss.ingest_sensor_systems_id = ANY(g.systems)
+              ) as measurands
+            FROM (
+              SELECT COALESCE(sy.instruments_id, s.instruments_id) as instruments_id
+              , m.full_name as manufacturer
+              , i.label as model
+              , s.instrument_ingest_id
+              , COUNT(1) as n
+              , COUNT(s.sensor_systems_id) as with_id
+              , SUM(s.is_new::int) as is_new
+              , SUM(s.is_fallback_instrument::int) as is_fallback
+              , array_agg(s.ingest_id) as systems
+              FROM staging_sensorsystems s
+              LEFT JOIN sensor_systems sy ON (sy.sensor_systems_id = s.sensor_systems_id)
+              LEFT JOIN instruments i
+                ON (i.instruments_id = COALESCE(sy.instruments_id, s.instruments_id))
+              LEFT JOIN entities m ON (i.manufacturer_entities_id = m.entities_id)
+              WHERE s.fetchlogs_id = %(fetchlogs_id)s
+              GROUP BY 1,2,3,4
+            ) g
             ORDER BY 2,3,4
         """,
     },
