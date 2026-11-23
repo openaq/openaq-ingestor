@@ -313,19 +313,38 @@ SELECT DISTINCT e.entities_id
   , jsonb_added('fetchlogs_id', fetchlogs_id, 'etl-process-nodes')
 FROM staging_sensorsystems s
 JOIN entities e ON s.manufacturer_key = e.ingest_id
+WHERE s.instrument_ingest_id IS NOT NULL
 ON CONFLICT DO NOTHING;
 
+-- Resolve the instrument for each system
+-- named instrument -> provider default (<source_name>::default) -> generic (1)
+UPDATE staging_sensorsystems s
+SET instruments_id = COALESCE(i.instruments_id, d.instruments_id, 1)
+  , is_fallback_instrument = i.instruments_id IS NULL
+FROM staging_sensorsystems s2
+LEFT JOIN instruments i ON (i.ingest_id = s2.instrument_ingest_id)
+LEFT JOIN sensor_nodes n ON (n.sensor_nodes_id = s2.sensor_nodes_id)
+LEFT JOIN instruments d ON (d.ingest_id = format('%s::default', n.source_name))
+WHERE s.ctid = s2.ctid;
 
+
+-- a fallback instrument will only fill in a missing instrument
+-- and will never replace an existing one
 UPDATE sensor_systems p
-  SET instruments_id = i.instruments_id
+  SET instruments_id = CASE
+        WHEN p.instruments_id IS NULL OR NOT s.is_fallback_instrument
+        THEN s.instruments_id
+        ELSE p.instruments_id
+      END
     , source_id = s.ingest_id
     , modified_on = now()
     , metadata = p.metadata || jsonb_modified('fetchlogs_id', fetchlogs_id, 'etl-process-nodes')
   FROM staging_sensorsystems s
-  LEFT JOIN instruments i ON (s.instrument_ingest_id = i.ingest_id)
   WHERE p.sensor_systems_id = s.sensor_systems_id
   AND (
-    (p.instruments_id IS NULL AND i.instruments_id IS NOT NULL OR p.instruments_id != i.instruments_id)
+    p.instruments_id IS NULL
+    OR
+    (NOT s.is_fallback_instrument AND p.instruments_id != s.instruments_id)
     OR
     (p.source_id IS NULL AND s.ingest_id IS NOT NULL OR p.source_id != s.ingest_id)
   );
@@ -335,13 +354,12 @@ UPDATE sensor_systems p
 INSERT INTO sensor_systems (sensor_nodes_id, source_id, instruments_id, metadata)
 SELECT sensor_nodes_id
 , s.ingest_id
-, i.instruments_id
+, s.instruments_id
 , s.metadata || jsonb_added('fetchlogs_id', fetchlogs_id, 'etl-process-nodes')
 FROM staging_sensorsystems s
-LEFT JOIN instruments i ON (s.instrument_ingest_id = i.ingest_id)
 WHERE sensor_nodes_id IS NOT NULL
   AND sensor_systems_id IS NULL
-GROUP BY sensor_nodes_id, s.ingest_id, i.instruments_id, s.metadata, fetchlogs_id
+GROUP BY sensor_nodes_id, s.ingest_id, s.instruments_id, s.metadata, fetchlogs_id
   ON CONFLICT DO NOTHING;
 
 -- ON CONFLICT (sensor_nodes_id, source_id) DO UPDATE SET
