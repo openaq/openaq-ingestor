@@ -255,11 +255,9 @@ def test_replay_is_idempotent(
     # ------- Pass 1: greenfield -------
     fl1 = make_fetchlog(f"replay-{source}-pass1")
     client1 = IngestClient(resources=ingest_resources, fetchlogs_id=fl1)
-    print(scenario["data"])
     client1.load(scenario["data"])
     client1.dump(load=True)
 
-    print(client1.sensors)
     snapshot_1 = _capture_state(get_object, source)
 
     dump(get_object("staged_measurements", source_name=source), "staged measurements")
@@ -291,6 +289,8 @@ def test_replay_is_idempotent(
     replay_data = _advance_measurements(scenario["data"], hours=1)
 
     client2 = IngestClient(resources=ingest_resources, fetchlogs_id=fl2)
+    # staging tables persist on a shared connection, so clear pass 1 (as cli.py does)
+    client2.reset()
     client2.load(replay_data)
     client2.dump(load=True)
 
@@ -326,6 +326,7 @@ def test_replay_is_idempotent(
     )
 
     client3 = IngestClient(resources=ingest_resources, fetchlogs_id=fl3)
+    client3.reset()
     client3.load(renamed_data)
     client3.dump(load=True)
 
@@ -357,6 +358,7 @@ def test_replay_is_idempotent(
     )
 
     client4 = IngestClient(resources=ingest_resources, fetchlogs_id=fl4)
+    client4.reset()
     client4.load(shifted_data)
     client4.dump(load=True)
 

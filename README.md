@@ -256,7 +256,7 @@ poetry run pytest tests/ --log-cli-level=DEBUG
 - Direct S3 events (manual invocations)
 - EventBridge cron triggers
 
-**Cronhandler Tests** (`test_cronhandler_unit.py`):
+**Cronhandler Tests** (`test_cronhandler_integration.py`):
 - Loader orchestration
 - Timeout handling
 - Error resilience
